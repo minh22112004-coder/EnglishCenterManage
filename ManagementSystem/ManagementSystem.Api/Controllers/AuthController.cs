@@ -92,11 +92,8 @@ namespace ManagementSystem.Api.Controllers
         [Authorize]
         public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto model)
         {
-            var username = User.Identity?.Name;
-            if (string.IsNullOrEmpty(username)) return Unauthorized();
-
-            var user = await _userManager.FindByNameAsync(username);
-            if (user == null) return NotFound("Không tìm thấy người dùng.");
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return NotFound(new { message = "Không tìm thấy người dùng (hoặc phiên đăng nhập đã hết hạn)." });
 
             var result = await _userManager.ChangePasswordAsync(user, model.OldPassword, model.NewPassword);
             
