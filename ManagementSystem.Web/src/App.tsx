@@ -2,10 +2,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import Login from './pages/Login';
 import Layout from './components/Layout';
 import LectureDashboard from './pages/LectureDashboard';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Login from './pages/Login';
-import Layout from './components/Layout';
-import LectureDashboard from './pages/LectureDashboard';
 import UserDashboard from './pages/UserDashboard';
 import StudentList from './pages/StudentList';
 import DeletedStudents from './pages/DeletedStudents';
