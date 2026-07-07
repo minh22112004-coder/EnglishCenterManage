@@ -3,8 +3,8 @@
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 USER app
 WORKDIR /app
-EXPOSE 8080
-EXPOSE 8081
+ENV ASPNETCORE_URLS=http://+:10000
+EXPOSE 10000
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
