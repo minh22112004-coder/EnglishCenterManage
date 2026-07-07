@@ -46,10 +46,9 @@ const Layout = () => {
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      toast.success('Đổi mật khẩu thành công! Vui lòng đăng nhập lại.');
+      toast.success('Đổi mật khẩu thành công!');
       setShowPasswordModal(false);
       setPasswordData({ oldPassword: '', newPassword: '', confirmPassword: '' });
-      handleLogout();
     } catch (error: any) {
       toast.error(error.response?.data?.message || 'Lỗi khi đổi mật khẩu.');
     }
