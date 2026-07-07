@@ -82,7 +82,7 @@ namespace ManagementSystem.Api.Controllers
 
                 // Cập nhật số buổi còn lại và gửi thông báo
                 student.TotalRemainingSessions = student.TotalPaidSessions - student.TotalAttendedSessions;
-                if (student.TotalRemainingSessions < 0 && !string.IsNullOrWhiteSpace(student.ParentPhoneNumber))
+                if (student.TotalRemainingSessions < 3 && !string.IsNullOrWhiteSpace(student.ParentPhoneNumber))
                 {
                     var parentUser = await _userManager.FindByNameAsync(student.ParentPhoneNumber);
                     if (parentUser != null)
@@ -92,10 +92,14 @@ namespace ManagementSystem.Api.Controllers
                         
                         if (existingNotif == null)
                         {
+                            string message = student.TotalRemainingSessions < 0
+                                ? $"Học sinh {student.FullName} đã học lố {-student.TotalRemainingSessions} buổi. Quý phụ huynh vui lòng hoàn thành đóng học phí."
+                                : $"Học sinh {student.FullName} chỉ còn {student.TotalRemainingSessions} buổi học. Quý phụ huynh vui lòng đóng thêm học phí để không gián đoạn việc học.";
+
                             _context.Notifications.Add(new Notification
                             {
                                 UserId = parentUser.Id,
-                                Message = $"Học sinh {student.FullName} đã học lố {-student.TotalRemainingSessions} buổi. Quý phụ huynh vui lòng hoàn thành đóng học phí.",
+                                Message = message,
                                 IsRead = false,
                                 HidePopup = false,
                                 CreatedAt = DateTime.UtcNow
