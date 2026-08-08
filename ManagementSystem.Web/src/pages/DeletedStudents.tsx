@@ -26,6 +26,11 @@ const DeletedStudents = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
 
+  const filteredStudents = students.filter((s: Student) => 
+    s.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    s.parentPhoneNumber.includes(searchQuery)
+  );
+
   const paginatedStudents = React.useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
     return filteredStudents.slice(startIndex, startIndex + itemsPerPage);
@@ -94,11 +99,6 @@ const DeletedStudents = () => {
       setSelectedStudentIds(filteredStudents.map(s => s.id));
     }
   };
-
-  const filteredStudents = students.filter((s: Student) => 
-    s.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.parentPhoneNumber.includes(searchQuery)
-  );
 
   return (
     <div className="space-y-6 animate-fade-in-up">
