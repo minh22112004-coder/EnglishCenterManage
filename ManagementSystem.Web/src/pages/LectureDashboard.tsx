@@ -8,6 +8,7 @@ const LectureDashboard = () => {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [viewMode, setViewMode] = useState<'day' | 'week' | 'month'>('day');
   const [loading, setLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   
   const [selectedSchedule, setSelectedSchedule] = useState<any | null>(null);
   
@@ -66,7 +67,10 @@ const LectureDashboard = () => {
   const currentYear = new Date().getFullYear();
   const schedulesThisMonth = schedules.filter(s => {
     const sDate = new Date(s.date);
-    return sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear;
+    const isThisMonth = sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear;
+    // TÍNH CÔNG: Chỉ tính những ca đã dạy (ngày trong quá khứ hoặc đã đánh dấu hoàn thành)
+    const hasTaught = sDate.getTime() <= new Date().getTime() || s.isTaskCompleted;
+    return isThisMonth && hasTaught;
   });
   const totalClassesThisMonth = schedulesThisMonth.reduce((acc, curr) => acc + (curr.classes?.length || 0), 0);
 
@@ -103,6 +107,7 @@ const LectureDashboard = () => {
 
   const handleSaveAll = async () => {
     if (!selectedSchedule) return;
+    setIsSaving(true);
 
     try {
       const token = localStorage.getItem('token');
@@ -138,7 +143,13 @@ const LectureDashboard = () => {
       });
 
       alert("Lưu tất cả thành công!");
-      fetchData(); // Refresh list to get updated status
+      
+      // Update local state without triggering a heavy network reload
+      setSchedules(prevSchedules => prevSchedules.map(s => 
+        s.id === selectedSchedule.id 
+          ? { ...s, lectureNotice, tasks: tasksState, isTaskCompleted: tasksState.every(t => t.isCompleted) }
+          : s
+      ));
       
       // Update selected schedule state implicitly by waiting for next click, or just update it manually
       setSelectedSchedule(prev => ({...prev, lectureNotice, tasks: tasksState}));
@@ -146,6 +157,8 @@ const LectureDashboard = () => {
     } catch (error) {
       console.error("Lỗi lưu", error);
       alert("Lưu thất bại. Kiểm tra kết nối mạng.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -270,10 +283,11 @@ const LectureDashboard = () => {
                 </div>
                 <button 
                   onClick={handleSaveAll}
-                  className="flex items-center px-6 py-2.5 bg-emerald-500 text-white font-bold rounded-xl shadow hover:bg-emerald-600 transition-all transform hover:-translate-y-0.5"
+                  disabled={isSaving}
+                  className={`flex items-center px-6 py-2.5 font-bold rounded-xl shadow transition-all transform hover:-translate-y-0.5 ${isSaving ? 'bg-slate-400 text-white cursor-not-allowed' : 'bg-emerald-500 text-white hover:bg-emerald-600'}`}
                 >
-                  <Save size={18} className="mr-2" />
-                  Lưu Tất Cả
+                  <Save size={18} className={`mr-2 ${isSaving ? 'animate-bounce' : ''}`} />
+                  {isSaving ? 'Đang lưu...' : 'Lưu Tất Cả'}
                 </button>
               </div>
 
