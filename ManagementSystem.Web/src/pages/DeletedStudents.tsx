@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Users, Search, RefreshCw, Trash2, ArrowLeft, CheckSquare } from 'lucide-react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
+import Pagination from '../components/Pagination';
 
 interface Student {
   id: number;
@@ -21,6 +22,14 @@ const DeletedStudents = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
   const [classes, setClasses] = useState<any[]>([]);
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+
+  const paginatedStudents = React.useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredStudents.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredStudents, currentPage, itemsPerPage]);
 
   useEffect(() => {
     fetchClasses();
@@ -164,7 +173,7 @@ const DeletedStudents = () => {
                     </div>
                   </td>
                 </tr>
-              ) : filteredStudents.map((student: Student) => (
+              ) : paginatedStudents.map((student: Student) => (
                 <tr key={student.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => toggleSelect(student.id)}>
                   <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
                     <input 
@@ -214,6 +223,17 @@ const DeletedStudents = () => {
             </tbody>
           </table>
         </div>
+        
+        <Pagination 
+          totalItems={filteredStudents.length}
+          itemsPerPage={itemsPerPage}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          onItemsPerPageChange={(items) => {
+            setItemsPerPage(items);
+            setCurrentPage(1);
+          }}
+        />
       </div>
     </div>
   );

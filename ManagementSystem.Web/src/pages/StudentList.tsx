@@ -3,6 +3,7 @@ import { Search, Plus, Filter, MoreVertical, Edit2, Trash2, Download, Upload, Re
 import axios from 'axios';
 import * as xlsx from 'xlsx';
 import StudentAttendanceModal from '../components/StudentAttendanceModal';
+import Pagination from '../components/Pagination';
 
 interface Student {
   id: number;
@@ -36,6 +37,9 @@ const StudentList = () => {
   const [selectedStudentForAttendance, setSelectedStudentForAttendance] = useState<Student | null>(null);
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
   const [showQuickSelect, setShowQuickSelect] = useState(false);
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
   
   const [isAdmin, setIsAdmin] = useState(false);
   
@@ -119,6 +123,15 @@ const StudentList = () => {
     }
     return sortableItems;
   }, [filteredStudents, sortConfig]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, sortConfig]);
+
+  const paginatedStudents = React.useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return sortedStudents.slice(startIndex, startIndex + itemsPerPage);
+  }, [sortedStudents, currentPage, itemsPerPage]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -495,7 +508,7 @@ const StudentList = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {sortedStudents.map((student) => (
+              {paginatedStudents.map((student) => (
                 <tr key={student.id} className="hover:bg-slate-50/80 transition-colors group">
                   <td className="px-6 py-4">
                     <input 
@@ -552,6 +565,17 @@ const StudentList = () => {
             </tbody>
           </table>
         </div>
+        
+        <Pagination 
+          totalItems={sortedStudents.length}
+          itemsPerPage={itemsPerPage}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          onItemsPerPageChange={(items) => {
+            setItemsPerPage(items);
+            setCurrentPage(1);
+          }}
+        />
       </div>
 
       {/* Modal Thêm học sinh */}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Plus, Edit2, Trash2, Calendar, QrCode, Upload, X } from 'lucide-react';
 import axios from 'axios';
+import Pagination from '../components/Pagination';
 
 const LectureList = () => {
   const [lectures, setLectures] = useState<any[]>([]);
@@ -13,6 +14,14 @@ const LectureList = () => {
   
   const [formData, setFormData] = useState({ id: '', fullName: '', phoneNumber: '', bankName: '', bankNumber: '', qrCodeImage: '' });
   const [isEditing, setIsEditing] = useState(false);
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+
+  const paginatedLectures = React.useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return lectures.slice(startIndex, startIndex + itemsPerPage);
+  }, [lectures, currentPage, itemsPerPage]);
 
   const fetchLectures = async () => {
     try {
@@ -132,7 +141,7 @@ const LectureList = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
-              {lectures.map((l) => (
+              {paginatedLectures.map((l) => (
                 <tr key={l.id} className="hover:bg-slate-50/80 transition-colors group">
                   <td className="p-4 font-bold text-slate-800">
                     <div className="flex items-center">
@@ -184,6 +193,17 @@ const LectureList = () => {
             </tbody>
           </table>
         </div>
+        
+        <Pagination 
+          totalItems={lectures.length}
+          itemsPerPage={itemsPerPage}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          onItemsPerPageChange={(items) => {
+            setItemsPerPage(items);
+            setCurrentPage(1);
+          }}
+        />
       </div>
 
       {/* Form Modal */}

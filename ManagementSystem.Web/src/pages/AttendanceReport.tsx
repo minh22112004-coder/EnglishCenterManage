@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Search, Download, Filter, FileText } from 'lucide-react';
 import axios from 'axios';
 import * as xlsx from 'xlsx';
+import Pagination from '../components/Pagination';
 
 const AttendanceReport = () => {
   const [reports, setReports] = useState<any[]>([]);
@@ -13,6 +14,18 @@ const AttendanceReport = () => {
   const [searchPhone, setSearchPhone] = useState('');
   const [searchClass, setSearchClass] = useState('');
   const [searchMonth, setSearchMonth] = useState(''); // Mặc định hiển thị tất cả
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+
+  const paginatedReports = React.useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredReports.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredReports, currentPage, itemsPerPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchName, searchPhone, searchClass, searchMonth]);
 
   const fetchReports = async () => {
     try {
@@ -169,7 +182,7 @@ const AttendanceReport = () => {
                   </td>
                 </tr>
               ) : (
-                filteredReports.map((r) => (
+                paginatedReports.map((r) => (
                   <tr key={r.studentId} className="hover:bg-slate-50/80 transition-colors">
                     <td className="p-4">
                       <p className="font-bold text-slate-800">{r.fullName}</p>
@@ -196,6 +209,17 @@ const AttendanceReport = () => {
             </tbody>
           </table>
         </div>
+        
+        <Pagination 
+          totalItems={filteredReports.length}
+          itemsPerPage={itemsPerPage}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          onItemsPerPageChange={(items) => {
+            setItemsPerPage(items);
+            setCurrentPage(1);
+          }}
+        />
       </div>
     </div>
   );

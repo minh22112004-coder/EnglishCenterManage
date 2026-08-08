@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Plus, Edit2, Trash2, Clock, CheckSquare } from 'lucide-react';
 import axios from 'axios';
+import Pagination from '../components/Pagination';
 
 const ScheduleList = () => {
   const [schedules, setSchedules] = useState<any[]>([]);
@@ -18,6 +19,14 @@ const ScheduleList = () => {
     roomCode: '',
     tasks: [] as { taskName: string, isCompleted?: boolean }[]
   });
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+
+  const paginatedSchedules = React.useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return schedules.slice(startIndex, startIndex + itemsPerPage);
+  }, [schedules, currentPage, itemsPerPage]);
 
   const resetForm = () => {
     setFormData({ userId: '', date: '', classIds: [], adminNotice: '', roomCode: '', tasks: [] });
@@ -128,7 +137,7 @@ const ScheduleList = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-sm">
-            {schedules.map((schedule) => (
+            {paginatedSchedules.map((schedule) => (
               <tr key={schedule.id} className="hover:bg-slate-50 transition-colors group align-top">
                 <td className="p-4 font-medium text-slate-800 whitespace-nowrap">
                   <div className="flex items-center">
@@ -221,6 +230,17 @@ const ScheduleList = () => {
           </tbody>
         </table>
         </div>
+        
+        <Pagination 
+          totalItems={schedules.length}
+          itemsPerPage={itemsPerPage}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          onItemsPerPageChange={(items) => {
+            setItemsPerPage(items);
+            setCurrentPage(1);
+          }}
+        />
       </div>
 
       {showModal && (
