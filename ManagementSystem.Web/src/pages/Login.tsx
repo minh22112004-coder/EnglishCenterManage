@@ -23,9 +23,12 @@ const Login = () => {
         password
       });
       
-      const { token, role } = response.data;
+      const { token, role, roles } = response.data;
       localStorage.setItem('token', token);
       localStorage.setItem('role', role);
+      if (roles && Array.isArray(roles)) {
+        localStorage.setItem('roles', JSON.stringify(roles));
+      }
       
       // Chuyển hướng theo quyền
       if (role === 'Admin') navigate('/admin');
@@ -33,7 +36,11 @@ const Login = () => {
       else navigate('/user');
       
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại Username/Password.');
+      if (err.response?.status === 429) {
+        setError(err.response?.data?.message || 'Bạn đã thử đăng nhập quá nhiều lần. Vui lòng thử lại sau 1 phút.');
+      } else {
+        setError(err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng kiểm tra lại Username/Password.');
+      }
     } finally {
       setLoading(false);
     }
