@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using ManagementSystem.Api.Data;
 using ManagementSystem.Api.Models;
 using System.Text.RegularExpressions;
+using System.Security.Claims;
 
 namespace ManagementSystem.Api.Controllers
 {
@@ -25,7 +26,25 @@ namespace ManagementSystem.Api.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<StudentResponseDto>>> GetStudents([FromQuery] string? search)
         {
-            var query = _context.Students.AsQueryable();
+            IQueryable<Student> query;
+
+            if (User.IsInRole("Admin"))
+            {
+                query = _context.Students.Include(s => s.Class).AsQueryable();
+            }
+            else
+            {
+                var userId = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+                var myClassIds = await _context.WorkSchedules
+                    .Where(w => w.UserId == userId)
+                    .SelectMany(w => w.Classes.Select(c => c.Id))
+                    .Distinct()
+                    .ToListAsync();
+                    
+                query = _context.Students.Include(s => s.Class)
+                    .Where(s => s.ClassId.HasValue && myClassIds.Contains(s.ClassId.Value));
+            }
+
             if (!string.IsNullOrEmpty(search))
             {
                 query = query.Where(s => s.FullName.Contains(search) || s.ParentPhoneNumber.Contains(search));
@@ -42,7 +61,9 @@ namespace ManagementSystem.Api.Controllers
                     TotalRemainingSessions = s.TotalRemainingSessions,
                     TotalAttendedSessions = s.TotalAttendedSessions,
                     TotalPaidSessions = s.TotalPaidSessions,
-                    ClassId = s.ClassId
+                    ClassId = s.ClassId,
+                    ClassName = s.Class != null ? s.Class.ClassName : null,
+                    IsDeleted = s.IsDeleted
                 })
                 .ToListAsync();
         }
@@ -50,7 +71,7 @@ namespace ManagementSystem.Api.Controllers
         [HttpGet("{id}")]
         public async Task<ActionResult<StudentResponseDto>> GetStudent(int id)
         {
-            var s = await _context.Students.FindAsync(id);
+            var s = await _context.Students.Include(s => s.Class).FirstOrDefaultAsync(s => s.Id == id);
 
             if (s == null)
             {
@@ -72,7 +93,9 @@ namespace ManagementSystem.Api.Controllers
                 TotalAttendedSessions = s.TotalAttendedSessions,
                 TotalPaidSessions = s.TotalPaidSessions,
                 ClassId = s.ClassId,
-                AttendanceRate = attendanceRate
+                ClassName = s.Class?.ClassName,
+                AttendanceRate = attendanceRate,
+                IsDeleted = s.IsDeleted
             };
         }
 
@@ -88,6 +111,8 @@ namespace ManagementSystem.Api.Controllers
                 parentName = string.IsNullOrWhiteSpace(parentName) ? rawPhone : $"{parentName} ({rawPhone})";
             }
 
+            var validClassId = (dto.ClassId.HasValue && dto.ClassId.Value > 0) ? dto.ClassId : null;
+
             var student = new Student
             {
                 FullName = dto.FullName,
@@ -96,7 +121,7 @@ namespace ManagementSystem.Api.Controllers
                 ParentPhoneNumber = validPhone,
                 TotalAttendedSessions = dto.TotalAttendedSessions,
                 TotalPaidSessions = dto.TotalPaidSessions,
-                ClassId = dto.ClassId
+                ClassId = validClassId
             };
 
             await UpdateRemainingSessionsAsync(student);
@@ -134,12 +159,13 @@ namespace ManagementSystem.Api.Controllers
                 TotalRemainingSessions = student.TotalRemainingSessions,
                 TotalAttendedSessions = student.TotalAttendedSessions,
                 TotalPaidSessions = student.TotalPaidSessions,
-                ClassId = student.ClassId
+                ClassId = student.ClassId,
+                IsDeleted = student.IsDeleted
             });
         }
 
         [HttpPut("{id}")]
-        [Authorize(Roles = "Admin,Lecture")]
+        [Authorize(Roles = "Admin")]
         public async Task<IActionResult> PutStudent(int id, StudentDto dto)
         {
             var existing = await _context.Students.FindAsync(id);
@@ -162,7 +188,7 @@ namespace ManagementSystem.Api.Controllers
             existing.ParentPhoneNumber = validPhone;
             existing.TotalAttendedSessions = dto.TotalAttendedSessions;
             existing.TotalPaidSessions = dto.TotalPaidSessions;
-            existing.ClassId = dto.ClassId;
+            existing.ClassId = (dto.ClassId.HasValue && dto.ClassId.Value > 0) ? dto.ClassId : null;
 
             await UpdateRemainingSessionsAsync(existing);
             await _context.SaveChangesAsync();
@@ -231,6 +257,7 @@ namespace ManagementSystem.Api.Controllers
         {
             var students = await _context.Students
                 .IgnoreQueryFilters()
+                .Include(s => s.Class)
                 .Where(s => s.IsDeleted)
                 .Select(s => new StudentResponseDto
                 {
@@ -242,7 +269,8 @@ namespace ManagementSystem.Api.Controllers
                     TotalRemainingSessions = s.TotalRemainingSessions,
                     TotalAttendedSessions = s.TotalAttendedSessions,
                     TotalPaidSessions = s.TotalPaidSessions,
-                    ClassId = s.ClassId
+                    ClassId = s.ClassId,
+                    ClassName = s.Class != null ? s.Class.ClassName : null
                 })
                 .ToListAsync();
 
@@ -264,10 +292,20 @@ namespace ManagementSystem.Api.Controllers
             if (!studentsToRecover.Any())
                 return NotFound("Không tìm thấy học sinh nào.");
 
+            // Lấy danh sách ID các lớp đang active (SC-09)
+            var activeClassIds = await _context.Classes.Select(c => c.Id).ToListAsync();
+
             foreach (var student in studentsToRecover)
             {
                 student.IsDeleted = false;
                 student.DeletedAt = null;
+
+                // Nếu lớp cũ đã bị xóa mềm, gỡ ClassId để tránh reference hỏng (SC-09)
+                if (student.ClassId.HasValue && !activeClassIds.Contains(student.ClassId.Value))
+                {
+                    student.ClassId = null;
+                }
+
                 // Thay đổi State thành Modified để EF cập nhật thay vì xóa
                 _context.Entry(student).State = EntityState.Modified;
             }
@@ -280,51 +318,80 @@ namespace ManagementSystem.Api.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> SyncAccounts()
         {
+            // 1. Lấy toàn bộ học sinh active (áp dụng Global Query Filter !IsDeleted)
             var students = await _context.Students.ToListAsync();
             int createdCount = 0;
-            
+            int unlockedCount = 0;
+
+            // Lưu các SĐT đã xử lý tài khoản Identity để tránh query DB lặp lại đối với phụ huynh nhiều con
+            var processedPhones = new HashSet<string>();
+
             foreach (var student in students)
             {
                 var rawPhone = student.ParentPhoneNumber;
                 var validPhone = ExtractValidPhoneNumber(rawPhone);
 
-                if (!string.IsNullOrWhiteSpace(validPhone))
-                {
-                    // Clean up DB if dirty
-                    if (rawPhone != validPhone && Regex.IsMatch(rawPhone ?? "", @"[a-zA-Z]"))
-                    {
-                        student.ParentName = string.IsNullOrWhiteSpace(student.ParentName) ? rawPhone : $"{student.ParentName} ({rawPhone})";
-                    }
-                    if (student.ParentPhoneNumber != validPhone)
-                    {
-                        student.ParentPhoneNumber = validPhone;
-                        _context.Entry(student).State = EntityState.Modified;
-                    }
+                // Bỏ qua nếu không trích xuất được số điện thoại hợp lệ
+                if (string.IsNullOrWhiteSpace(validPhone)) continue;
 
-                    if (!string.IsNullOrWhiteSpace(validPhone))
+                // === PHASE 1: Chuẩn hóa bản ghi học sinh trong DB (áp dụng cho từng học sinh) ===
+                if (rawPhone != validPhone && Regex.IsMatch(rawPhone ?? "", @"[a-zA-Z]"))
+                {
+                    student.ParentName = string.IsNullOrWhiteSpace(student.ParentName)
+                        ? (rawPhone ?? "")
+                        : $"{student.ParentName} ({rawPhone})";
+                }
+
+                if (student.ParentPhoneNumber != validPhone)
+                {
+                    student.ParentPhoneNumber = validPhone;
+                }
+
+                // === PHASE 2: Xử lý tài khoản Identity (Đảm bảo mỗi SĐT duy nhất chỉ query UserManager đúng 1 lần) ===
+                if (!processedPhones.Add(validPhone)) continue;
+
+                var parentUser = await _userManager.FindByNameAsync(validPhone);
+                if (parentUser == null)
+                {
+                    var newUser = new AppUser
                     {
-                        var parentUser = await _userManager.FindByNameAsync(validPhone);
-                        if (parentUser == null)
-                        {
-                            var newUser = new AppUser
-                            {
-                                UserName = validPhone,
-                                Email = validPhone + "@example.com",
-                                FullName = student.ParentName ?? "Phụ huynh " + student.FullName
-                            };
-                            var result = await _userManager.CreateAsync(newUser, validPhone + "@123Aa");
-                            if (result.Succeeded)
-                            {
-                                await _userManager.AddToRoleAsync(newUser, "User");
-                                createdCount++;
-                            }
-                        }
+                        UserName = validPhone,
+                        Email = validPhone + "@example.com",
+                        PhoneNumber = validPhone,
+                        FullName = !string.IsNullOrWhiteSpace(student.ParentName)
+                            ? student.ParentName
+                            : ("Phụ huynh " + student.FullName)
+                    };
+
+                    var result = await _userManager.CreateAsync(newUser, validPhone + "@123Aa");
+                    if (result.Succeeded)
+                    {
+                        await _userManager.AddToRoleAsync(newUser, "User");
+                        createdCount++;
+                    }
+                }
+                else if (await _userManager.IsLockedOutAsync(parentUser))
+                {
+                    // [Self-healing/Repair]: Tự động mở khóa tài khoản bị kẹt lockout
+                    // nhưng hiện vẫn còn ít nhất 1 học sinh active trong hệ thống.
+                    var roles = await _userManager.GetRolesAsync(parentUser);
+                    if (!roles.Contains("Admin") && !roles.Contains("Lecture"))
+                    {
+                        await _userManager.SetLockoutEndDateAsync(parentUser, null);
+                        await _userManager.ResetAccessFailedCountAsync(parentUser);
+                        unlockedCount++;
                     }
                 }
             }
+
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = $"Đã đồng bộ thành công. Dọn dẹp dữ liệu và tạo mới {createdCount} tài khoản phụ huynh." });
+            return Ok(new
+            {
+                message = $"Đã đồng bộ thành công: tạo mới {createdCount} và mở khóa {unlockedCount} tài khoản phụ huynh.",
+                createdCount,
+                unlockedCount
+            });
         }
 
         private string ExtractValidPhoneNumber(string? rawPhone)
@@ -347,26 +414,28 @@ namespace ManagementSystem.Api.Controllers
         [Authorize(Roles = "User")]
         public async Task<ActionResult<IEnumerable<StudentResponseDto>>> GetMyChildren()
         {
-            var userPhone = User.Identity?.Name;
+            var userPhone = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.MobilePhone)?.Value ?? User.Identity?.Name;
             if (string.IsNullOrEmpty(userPhone)) return Unauthorized();
 
             var students = await _context.Students
+                .IgnoreQueryFilters()
+                .Include(s => s.Class)
                 .Where(s => s.ParentPhoneNumber == userPhone)
+                .ToListAsync();
+
+            var studentIds = students.Select(s => s.Id).ToList();
+            var attendances = await _context.Attendances
+                .Where(a => studentIds.Contains(a.StudentId))
+                .Select(a => new { a.StudentId, a.IsPresent })
                 .ToListAsync();
 
             var result = new List<StudentResponseDto>();
             foreach(var s in students)
             {
-                var attendanceCount = await _context.Attendances.CountAsync(a => a.StudentId == s.Id);
-                var presentCount = await _context.Attendances.CountAsync(a => a.StudentId == s.Id && a.IsPresent);
+                var studentAtts = attendances.Where(a => a.StudentId == s.Id).ToList();
+                var attendanceCount = studentAtts.Count;
+                var presentCount = studentAtts.Count(a => a.IsPresent);
                 int attendanceRate = attendanceCount == 0 ? 100 : (int)Math.Round((double)presentCount / attendanceCount * 100);
-                
-                // Trả về kèm class name để hiện thị
-                var className = "";
-                if (s.ClassId > 0) {
-                    var cls = await _context.Classes.FindAsync(s.ClassId);
-                    className = cls?.ClassName ?? "";
-                }
 
                 result.Add(new StudentResponseDto
                 {
@@ -380,7 +449,8 @@ namespace ManagementSystem.Api.Controllers
                     TotalPaidSessions = s.TotalPaidSessions,
                     ClassId = s.ClassId,
                     AttendanceRate = attendanceRate,
-                    ClassName = className
+                    ClassName = s.Class?.ClassName ?? "",
+                    IsDeleted = s.IsDeleted
                 });
             }
 
@@ -396,22 +466,34 @@ namespace ManagementSystem.Api.Controllers
                 if (dtos == null || !dtos.Any())
                     return BadRequest("Không có dữ liệu.");
 
+                // SC-06: Cache danh sách Class để tránh query lặp và chống race condition tạo duplicate class
+                var classCache = new Dictionary<string, Class>(StringComparer.OrdinalIgnoreCase);
+                var existingClasses = await _context.Classes.ToListAsync();
+                foreach (var c in existingClasses)
+                {
+                    if (!classCache.ContainsKey(c.ClassName))
+                    {
+                        classCache[c.ClassName] = c;
+                    }
+                }
+
                 foreach (var dto in dtos)
                 {
-                    // Tìm class theo tên
-                    var cls = await _context.Classes.FirstOrDefaultAsync(c => c.ClassName == dto.ClassName && !c.IsDeleted);
-                    if (cls == null)
+                    var className = dto.ClassName?.Trim() ?? "Chưa rõ";
+                    if (!classCache.TryGetValue(className, out var cls))
                     {
-                        // Tự động tạo class nếu chưa có
+                        // SC-06: Tạo ClassCode duy nhất, không dùng new Random() đơn thuần
+                        var uniqueCode = $"CL{DateTime.UtcNow:yyMMdd}{Random.Shared.Next(1000, 9999)}";
                         cls = new Class
                         {
-                            ClassName = dto.ClassName ?? "Chưa rõ",
-                            ClassCode = "CL" + new Random().Next(1000, 9999), // Dummy code
+                            ClassName = className,
+                            ClassCode = uniqueCode,
                             TotalSessions = 100,
                             TimeSlots = "Chưa thiết lập"
                         };
                         _context.Classes.Add(cls);
                         await _context.SaveChangesAsync();
+                        classCache[className] = cls;
                     }
 
                     // Check trùng số điện thoại
@@ -426,6 +508,13 @@ namespace ManagementSystem.Api.Controllers
                             parentName = string.IsNullOrWhiteSpace(parentName) ? rawPhone : $"{parentName} ({rawPhone})";
                         }
 
+                        // SC-07: Đảm bảo tính toán nhất quán nếu file chỉ có số buổi còn lại
+                        var paidSessions = dto.TotalPaidSessions;
+                        if (paidSessions == 0 && dto.TotalRemainingSessions > 0 && dto.TotalAttendedSessions == 0)
+                        {
+                            paidSessions = dto.TotalRemainingSessions;
+                        }
+
                         student = new Student
                         {
                             FullName = dto.FullName,
@@ -433,8 +522,7 @@ namespace ManagementSystem.Api.Controllers
                             ParentPhoneNumber = validPhone,
                             DateOfBirth = dto.DateOfBirth,
                             TotalAttendedSessions = dto.TotalAttendedSessions,
-                            TotalPaidSessions = dto.TotalPaidSessions,
-                            TotalRemainingSessions = dto.TotalRemainingSessions,
+                            TotalPaidSessions = paidSessions,
                             ClassId = cls.Id
                         };
                         _context.Students.Add(student);
@@ -461,15 +549,19 @@ namespace ManagementSystem.Api.Controllers
                     }
                     else
                     {
-                        // Cập nhật nếu đã có
+                        // Cập nhật nếu đã có (SC-07: nhất quán tính toán buổi còn lại)
                         student.TotalAttendedSessions = dto.TotalAttendedSessions;
                         student.TotalPaidSessions = dto.TotalPaidSessions;
+                        if (student.TotalPaidSessions == 0 && dto.TotalRemainingSessions > 0 && dto.TotalAttendedSessions == 0)
+                        {
+                            student.TotalPaidSessions = dto.TotalRemainingSessions;
+                        }
                         student.ClassId = cls.Id;
                     }
 
                     await UpdateRemainingSessionsAsync(student);
 
-                    // Thêm danh sách ngày điểm danh
+                    // Thêm danh sách ngày điểm danh (SC-04: kèm snapshot ClassId)
                     foreach (var dt in dto.AttendedDates)
                     {
                         var dtUtc = dt.ToUniversalTime();
@@ -478,6 +570,7 @@ namespace ManagementSystem.Api.Controllers
                         {
                             _context.Attendances.Add(new Attendance {
                                 Student = student,
+                                ClassId = cls.Id,
                                 Date = dtUtc,
                                 IsPresent = true
                             });

@@ -9,7 +9,7 @@ namespace ManagementSystem.Api.Models
         public int TotalRemainingSessions { get; set; }
         public int TotalAttendedSessions { get; set; }
         public int TotalPaidSessions { get; set; }
-        public int ClassId { get; set; }
+        public int? ClassId { get; set; }
     }
 
     public class StudentResponseDto : StudentDto
@@ -17,5 +17,6 @@ namespace ManagementSystem.Api.Models
         public int Id { get; set; }
         public int? AttendanceRate { get; set; }
         public string? ClassName { get; set; }
+        public bool IsDeleted { get; set; }
     }
 }

@@ -76,7 +76,14 @@ const UserDashboard = () => {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Xin chào, {parentName}</h1>
             {selectedChild && (
-              <p className="text-cyan-100 mt-2 text-lg">Đây là trang thông tin học tập của em <span className="font-semibold text-white">{selectedChild.fullName}</span></p>
+              <p className="text-cyan-100 mt-2 text-lg flex items-center flex-wrap">
+                Đây là trang thông tin học tập của em <span className="font-semibold text-white mx-1">{selectedChild.fullName}</span>
+                {selectedChild.isDeleted && (
+                  <span className="bg-red-500/20 text-red-100 border border-red-500/50 text-xs px-2 py-0.5 rounded-full ml-1 flex items-center">
+                    <AlertTriangle size={12} className="mr-1" /> Đã nghỉ
+                  </span>
+                )}
+              </p>
             )}
           </div>
           
@@ -92,7 +99,7 @@ const UserDashboard = () => {
                 }}
               >
                 {children.map(c => (
-                  <option key={c.id} value={c.id} className="text-slate-800">{c.fullName}</option>
+                  <option key={c.id} value={c.id} className="text-slate-800">{c.fullName} {c.isDeleted ? '(Đã nghỉ)' : ''}</option>
                 ))}
               </select>
             </div>

@@ -8,33 +8,33 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  
+
   const navigate = useNavigate();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    
+
     try {
       // Gọi API đến Backend
       const response = await axios.post(`/auth/login`, {
         username,
         password
       });
-      
+
       const { token, role, roles } = response.data;
       localStorage.setItem('token', token);
       localStorage.setItem('role', role);
       if (roles && Array.isArray(roles)) {
         localStorage.setItem('roles', JSON.stringify(roles));
       }
-      
+
       // Chuyển hướng theo quyền
       if (role === 'Admin') navigate('/admin');
       else if (role === 'Lecture') navigate('/lecture');
       else navigate('/user');
-      
+
     } catch (err: any) {
       if (err.response?.status === 429) {
         setError(err.response?.data?.message || 'Bạn đã thử đăng nhập quá nhiều lần. Vui lòng thử lại sau 1 phút.');
@@ -48,7 +48,7 @@ const Login = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
-      
+
       {/* Các hình tròn làm mờ để tạo phong cách Glassmorphism & Rich Aesthetics */}
       <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-purple-600 rounded-full mix-blend-multiply filter blur-[128px] opacity-70 animate-pulse"></div>
       <div className="absolute top-[20%] right-[-10%] w-96 h-96 bg-cyan-500 rounded-full mix-blend-multiply filter blur-[128px] opacity-70 animate-pulse" style={{ animationDelay: '2s' }}></div>
@@ -61,10 +61,10 @@ const Login = () => {
               <ShieldCheck className="w-10 h-10 text-white" />
             </div>
           </div>
-          
+
           <h2 className="text-3xl font-bold text-center text-white mb-2 tracking-tight">Hệ Thống Quản Lý</h2>
           <p className="text-center text-indigo-200 mb-8 text-sm">Đăng nhập để tiếp tục</p>
-          
+
           {error && (
             <div className="mb-6 p-4 bg-red-500/20 border border-red-500/50 rounded-xl text-red-100 text-sm">
               {error}
@@ -115,9 +115,9 @@ const Login = () => {
               {!loading && <ArrowRight size={20} className="ml-1" />}
             </button>
           </form>
-          
+
         </div>
-        
+
         <p className="text-center text-indigo-300/60 text-xs mt-6">
           &copy; 2026 Management System. All rights reserved.
         </p>

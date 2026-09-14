@@ -19,6 +19,7 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpGet("payment")]
+        [Authorize]
         public IActionResult GetPaymentSettings()
         {
             if (!System.IO.File.Exists(_settingsFilePath))

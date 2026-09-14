@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ManagementSystem.Api.Data;
 using ManagementSystem.Api.Models;
+using System.Security.Claims;
 
 namespace ManagementSystem.Api.Controllers
 {
@@ -22,12 +23,13 @@ namespace ManagementSystem.Api.Controllers
         [Authorize(Roles = "User")]
         public async Task<ActionResult<IEnumerable<object>>> GetMyChildrenUpcomingSchedules()
         {
-            var userPhone = User.Identity?.Name;
+            var userPhone = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.MobilePhone)?.Value ?? User.Identity?.Name;
             if (string.IsNullOrEmpty(userPhone)) return Unauthorized();
 
             var studentClasses = await _context.Students
-                .Where(s => s.ParentPhoneNumber == userPhone && s.ClassId > 0)
-                .Select(s => new { s.Id, s.FullName, s.ClassId })
+                .IgnoreQueryFilters()
+                .Where(s => s.ParentPhoneNumber == userPhone && s.ClassId.HasValue && s.ClassId.Value > 0)
+                .Select(s => new { s.Id, s.FullName, ClassId = s.ClassId!.Value })
                 .ToListAsync();
 
             var classIds = studentClasses.Select(s => s.ClassId).Distinct().ToList();

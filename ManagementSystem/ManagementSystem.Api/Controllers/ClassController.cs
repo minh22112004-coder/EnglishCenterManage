@@ -29,7 +29,7 @@ namespace ManagementSystem.Api.Controllers
                     ClassName = c.ClassName,
                     TotalSessions = c.TotalSessions,
                     TimeSlots = c.TimeSlots,
-                    StudentIds = _context.Students.Where(s => s.ClassId == c.Id && !s.IsDeleted).Select(s => s.Id).ToList()
+                    StudentIds = c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
                 })
                 .ToListAsync();
         }
@@ -37,7 +37,9 @@ namespace ManagementSystem.Api.Controllers
         [HttpGet("{id}")]
         public async Task<ActionResult<ClassResponseDto>> GetClass(int id)
         {
-            var c = await _context.Classes.FindAsync(id);
+            var c = await _context.Classes
+                .Include(c => c.Students.Where(s => !s.IsDeleted))
+                .FirstOrDefaultAsync(c => c.Id == id);
 
             if (c == null)
             {
@@ -51,7 +53,7 @@ namespace ManagementSystem.Api.Controllers
                 ClassName = c.ClassName,
                 TotalSessions = c.TotalSessions,
                 TimeSlots = c.TimeSlots,
-                StudentIds = await _context.Students.Where(s => s.ClassId == c.Id && !s.IsDeleted).Select(s => s.Id).ToListAsync()
+                StudentIds = c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
             };
         }
 
@@ -59,6 +61,21 @@ namespace ManagementSystem.Api.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<ActionResult<ClassResponseDto>> PostClass(ClassDto classDto)
         {
+            // Kiểm tra trùng lặp học sinh đang thuộc lớp khác (SC-02)
+            if (classDto.StudentIds != null && classDto.StudentIds.Any())
+            {
+                var conflictingStudents = await _context.Students
+                    .Include(s => s.Class)
+                    .Where(s => classDto.StudentIds.Contains(s.Id) && s.ClassId != null)
+                    .ToListAsync();
+
+                if (conflictingStudents.Any())
+                {
+                    var conflictDetails = string.Join(", ", conflictingStudents.Select(s => $"{s.FullName} (đang ở lớp {s.Class?.ClassName ?? s.ClassId.ToString()})"));
+                    return BadRequest(new { message = $"Không thể thêm học sinh vì đã thuộc lớp khác: {conflictDetails}." });
+                }
+            }
+
             var newClass = new Class
             {
                 ClassCode = classDto.ClassCode,
@@ -92,7 +109,7 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpPut("{id}")]
-        [Authorize(Roles = "Admin,Lecture")]
+        [Authorize(Roles = "Admin")]
         public async Task<IActionResult> PutClass(int id, ClassDto classDto)
         {
             var existingClass = await _context.Classes.FindAsync(id);
@@ -108,15 +125,29 @@ namespace ManagementSystem.Api.Controllers
 
             if (classDto.StudentIds != null)
             {
+                // 1. Kiểm tra học sinh có đang thuộc lớp khác không (SC-02: Chống Student Stealing)
+                var conflictingStudents = await _context.Students
+                    .Include(s => s.Class)
+                    .Where(s => classDto.StudentIds.Contains(s.Id) && s.ClassId != null && s.ClassId != id)
+                    .ToListAsync();
+
+                if (conflictingStudents.Any())
+                {
+                    var conflictDetails = string.Join(", ", conflictingStudents.Select(s => $"{s.FullName} (đang ở lớp {s.Class?.ClassName ?? s.ClassId.ToString()})"));
+                    return BadRequest(new { message = $"Không thể thêm học sinh vì đã thuộc lớp khác: {conflictDetails}." });
+                }
+
+                // 2. Gỡ những học sinh không còn trong danh sách lớp (SC-01: nullable ClassId thay vì 0)
                 var currentStudents = await _context.Students.Where(s => s.ClassId == id).ToListAsync();
                 foreach (var student in currentStudents)
                 {
                     if (!classDto.StudentIds.Contains(student.Id))
                     {
-                        student.ClassId = 0; // Remove from class
+                        student.ClassId = null; // Gỡ khỏi lớp an toàn, không vi phạm FK
                     }
                 }
 
+                // 3. Gán học sinh mới vào lớp
                 var newStudents = await _context.Students.Where(s => classDto.StudentIds.Contains(s.Id)).ToListAsync();
                 foreach (var student in newStudents)
                 {
@@ -125,7 +156,6 @@ namespace ManagementSystem.Api.Controllers
             }
 
             await _context.SaveChangesAsync();
-            // TODO: Bắt sự kiện AuditLog nếu là Lecture
 
             return NoContent();
         }
@@ -140,6 +170,13 @@ namespace ManagementSystem.Api.Controllers
                 return NotFound();
             }
 
+            // Kiểm tra xem lớp còn học sinh active không (SC-03)
+            var hasActiveStudents = await _context.Students.AnyAsync(s => s.ClassId == id && !s.IsDeleted);
+            if (hasActiveStudents)
+            {
+                return BadRequest(new { message = "Không thể xóa lớp học vì vẫn còn học sinh đang theo học. Vui lòng chuyển hoặc gỡ học sinh khỏi lớp trước khi xóa." });
+            }
+
             // EF Core SaveChanges() đã được override để đổi State thành Modified và gán IsDeleted = true
             _context.Classes.Remove(existingClass);
             await _context.SaveChangesAsync();
@@ -151,9 +188,10 @@ namespace ManagementSystem.Api.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> GetClassAttendances(int id)
         {
+            // Lọc theo ClassId của Attendance (SC-04: bảo toàn lịch sử khi học sinh chuyển lớp)
             var attendances = await _context.Attendances
                 .Include(a => a.Student)
-                .Where(a => a.Student.ClassId == id)
+                .Where(a => a.ClassId == id || (a.ClassId == null && a.Student.ClassId == id))
                 .OrderByDescending(a => a.Date)
                 .Select(a => new
                 {

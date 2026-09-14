@@ -7,6 +7,9 @@ namespace ManagementSystem.Api.Models
         public DateTime Date { get; set; }
         public bool IsPresent { get; set; }
 
+        public int? ClassId { get; set; }
+        public Class? Class { get; set; }
+
         public Student Student { get; set; } = null!;
     }
 }

@@ -17,19 +17,29 @@ import { Toaster } from 'react-hot-toast';
 // Hàm phân quyền
 const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode, allowedRoles: string[] }) => {
   const role = localStorage.getItem('role');
-  
-  if (!role) {
+  const rolesJson = localStorage.getItem('roles');
+  let roles: string[] = [];
+  try {
+    roles = rolesJson ? JSON.parse(rolesJson) : (role ? [role] : []);
+  } catch {
+    roles = role ? [role] : [];
+  }
+
+  if (roles.length === 0) {
     return <Navigate to="/login" replace />;
   }
-  
-  if (!allowedRoles.includes(role)) {
-    // Nếu không có quyền, đẩy về dashboard tương ứng của họ
-    if (role === 'Admin') return <Navigate to="/admin" replace />;
-    if (role === 'Lecture') return <Navigate to="/lecture" replace />;
-    if (role === 'User') return <Navigate to="/user" replace />;
+
+  // Kiểm tra MẢNG roles đầy đủ thay vì chỉ primaryRole
+  const hasAccess = allowedRoles.some(r => roles.includes(r));
+
+  if (!hasAccess) {
+    // Nếu không có quyền, điều hướng fallback theo vai trò người dùng sở hữu
+    if (roles.includes('Admin')) return <Navigate to="/admin" replace />;
+    if (roles.includes('Lecture')) return <Navigate to="/lecture" replace />;
+    if (roles.includes('User')) return <Navigate to="/user" replace />;
     return <Navigate to="/login" replace />;
   }
-  
+
   return <>{children}</>;
 };
 
@@ -40,7 +50,7 @@ function App() {
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
-          
+
           {/* Protected routes wrapped in Layout */}
           <Route element={<Layout />}>
             {/* Admin Routes */}
@@ -84,14 +94,14 @@ function App() {
                 <Settings />
               </ProtectedRoute>
             } />
-            
+
             {/* Lecture Route */}
             <Route path="/lecture" element={
               <ProtectedRoute allowedRoles={['Lecture']}>
                 <LectureDashboard />
               </ProtectedRoute>
             } />
-            
+
             {/* User Route */}
             <Route path="/user" element={
               <ProtectedRoute allowedRoles={['User']}>
@@ -99,7 +109,7 @@ function App() {
               </ProtectedRoute>
             } />
           </Route>
-          
+
           {/* Default route */}
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>

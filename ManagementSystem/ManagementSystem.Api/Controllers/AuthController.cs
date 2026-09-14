@@ -6,6 +6,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Microsoft.EntityFrameworkCore;
 using ManagementSystem.Api.Models;
 
 namespace ManagementSystem.Api.Controllers
@@ -43,10 +44,12 @@ namespace ManagementSystem.Api.Controllers
             var normalizedUsername = username.ToLowerInvariant();
 
             // AUTH-04: Tìm kiếm linh hoạt theo Username hoặc Email (bao gồm cả chuẩn hóa chữ thường)
+            // L03: Fallback tìm theo PhoneNumber nếu UserName chưa đồng bộ
             var user = await _userManager.FindByEmailAsync(username) 
                        ?? await _userManager.FindByNameAsync(username)
                        ?? await _userManager.FindByEmailAsync(normalizedUsername)
-                       ?? await _userManager.FindByNameAsync(normalizedUsername);
+                       ?? await _userManager.FindByNameAsync(normalizedUsername)
+                       ?? await _userManager.Users.FirstOrDefaultAsync(u => u.PhoneNumber == username);
             
             if (user != null)
             {
@@ -86,7 +89,8 @@ namespace ManagementSystem.Api.Controllers
                         new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
                         new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
                         new Claim(ClaimTypes.NameIdentifier, user.Id),
-                        new Claim("FullName", user.FullName ?? string.Empty)
+                        new Claim("FullName", user.FullName ?? string.Empty),
+                        new Claim(ClaimTypes.MobilePhone, user.PhoneNumber ?? string.Empty)
                     };
 
                     foreach (var userRole in userRoles)

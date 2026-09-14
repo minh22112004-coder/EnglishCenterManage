@@ -209,23 +209,41 @@ const ClassList = () => {
                     className="w-full border border-slate-200 rounded-xl px-4 py-2 mb-2 focus:ring-2 focus:ring-indigo-500/50" 
                   />
                   <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-1">
-                    {students.filter(s => s.fullName.toLowerCase().includes(searchStudent.toLowerCase())).map(student => (
-                      <label key={student.id} className="flex items-center space-x-2 p-2 hover:bg-slate-50 rounded cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          checked={formData.studentIds.includes(student.id)}
-                          onChange={(e) => {
-                            const newIds = e.target.checked 
-                              ? [...formData.studentIds, student.id]
-                              : formData.studentIds.filter(id => id !== student.id);
-                            setFormData({ ...formData, studentIds: newIds });
-                          }}
-                          className="rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <span className="text-sm font-medium text-slate-700">{student.fullName}</span>
-                        <span className="text-xs text-slate-400">({student.parentPhoneNumber})</span>
-                      </label>
-                    ))}
+                    {students.filter(s => s.fullName.toLowerCase().includes(searchStudent.toLowerCase())).map(student => {
+                      const isCurrentSelected = formData.studentIds.includes(student.id);
+                      const isInOtherClass = Boolean(student.classId && student.classId !== editId);
+                      return (
+                        <label 
+                          key={student.id} 
+                          className={`flex items-center space-x-2 p-2 rounded ${isInOtherClass ? 'opacity-60 bg-slate-50 cursor-not-allowed' : 'hover:bg-slate-50 cursor-pointer'}`}
+                          title={isInOtherClass ? `Đang thuộc lớp: ${student.className || 'ID ' + student.classId}` : ''}
+                        >
+                          <input 
+                            type="checkbox" 
+                            checked={isCurrentSelected}
+                            disabled={isInOtherClass}
+                            onChange={(e) => {
+                              const newIds = e.target.checked 
+                                ? [...formData.studentIds, student.id]
+                                : formData.studentIds.filter(id => id !== student.id);
+                              setFormData({ ...formData, studentIds: newIds });
+                            }}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 disabled:opacity-40"
+                          />
+                          <div className="flex-1 flex items-center justify-between">
+                            <span className="text-sm font-medium text-slate-700">{student.fullName}</span>
+                            <div className="flex items-center space-x-1.5">
+                              {isInOtherClass && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                                  {student.className || 'Đã có lớp'}
+                                </span>
+                              )}
+                              <span className="text-xs text-slate-400">({student.parentPhoneNumber})</span>
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
                     {students.length === 0 && <p className="text-xs text-slate-500 text-center py-2">Chưa có học viên nào trong hệ thống</p>}
                   </div>
                 </div>

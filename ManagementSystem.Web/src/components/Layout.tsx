@@ -2,13 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
-import { 
-  LayoutDashboard, 
-  Users, 
-  GraduationCap, 
-  Calendar, 
-  Settings, 
-  LogOut, 
+import {
+  LayoutDashboard,
+  Users,
+  GraduationCap,
+  Calendar,
+  Settings,
+  LogOut,
   Menu,
   X,
   Bell,
@@ -29,6 +29,8 @@ const Layout = () => {
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('role');
+    localStorage.removeItem('roles');
+    localStorage.removeItem('user');
     navigate('/login');
   };
 
@@ -93,7 +95,7 @@ const Layout = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       setNotifications(res.data);
-      
+
       const unreadPopup = res.data.find((n: any) => !n.isRead && !n.hidePopup);
       if (unreadPopup) {
         setShowNotificationPopup(true);
@@ -110,7 +112,7 @@ const Layout = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchNotifications();
-    } catch (err) {}
+    } catch (err) { }
   };
 
   const hidePopup = async (id: number) => {
@@ -121,7 +123,7 @@ const Layout = () => {
       });
       setShowNotificationPopup(false);
       fetchNotifications();
-    } catch (err) {}
+    } catch (err) { }
   };
 
   let navItems = adminNavItems;
@@ -130,10 +132,10 @@ const Layout = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex overflow-hidden font-sans">
-      
+
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
-        <div 
+        <div
           className="fixed inset-0 z-20 bg-slate-900/50 backdrop-blur-sm lg:hidden transition-opacity"
           onClick={() => setSidebarOpen(false)}
         />
@@ -141,7 +143,7 @@ const Layout = () => {
 
       {/* Sidebar */}
       <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-slate-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        
+
         <div className="flex items-center justify-between h-16 px-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md z-10">
           <span className="text-xl font-bold tracking-wider">{role === 'Admin' ? 'LMS Admin' : (role === 'Lecture' ? 'Giáo viên' : 'Học viên')}</span>
           <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-indigo-100 hover:text-white">
@@ -160,27 +162,26 @@ const Layout = () => {
                   navigate(item.path);
                   setSidebarOpen(false);
                 }}
-                className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 group ${
-                  isActive 
-                    ? 'bg-indigo-50 text-indigo-700 shadow-sm' 
+                className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 group ${isActive
+                    ? 'bg-indigo-50 text-indigo-700 shadow-sm'
                     : 'text-slate-600 hover:bg-slate-50 hover:text-indigo-600'
-                }`}
+                  }`}
               >
                 <Icon size={20} className={`mr-3 ${isActive ? 'text-indigo-600' : 'text-slate-400 group-hover:text-indigo-500'}`} />
                 {item.name}
               </button>
             );
           })}
-          
+
           <div className="pt-4 mt-4 border-t border-slate-200">
-            <button 
+            <button
               onClick={() => setShowPasswordModal(true)}
               className="w-full flex items-center px-4 py-3 text-sm font-medium text-slate-600 rounded-xl hover:bg-slate-50 transition-all mb-2"
             >
               <Key size={20} className="mr-3 text-slate-500" />
               Đổi mật khẩu
             </button>
-            <button 
+            <button
               onClick={handleLogout}
               className="w-full flex items-center px-4 py-3 text-sm font-medium text-red-600 rounded-xl hover:bg-red-50 border border-transparent hover:border-red-100 transition-all"
             >
@@ -193,11 +194,11 @@ const Layout = () => {
 
       {/* Main content wrapper */}
       <div className="flex-1 flex flex-col w-0 overflow-hidden">
-        
+
         {/* Header */}
         <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 lg:px-8 z-10 shadow-sm sticky top-0">
           <div className="flex items-center">
-            <button 
+            <button
               onClick={() => setSidebarOpen(true)}
               className="lg:hidden text-slate-500 hover:text-indigo-600 p-2 mr-4 rounded-md hover:bg-slate-100"
             >
@@ -207,12 +208,12 @@ const Layout = () => {
               {navItems.find(i => location.pathname === i.path || (location.pathname.startsWith(i.path) && i.path !== '/admin'))?.name || 'Trang chủ'}
             </h2>
           </div>
-          
+
           <div className="flex-1 flex justify-end items-center space-x-6">
-            
+
             {role === 'User' && (
               <div className="relative">
-                <button 
+                <button
                   onClick={() => setShowBellDropdown(!showBellDropdown)}
                   className="text-slate-400 hover:text-indigo-600 relative transition-colors"
                 >
@@ -230,8 +231,8 @@ const Layout = () => {
                         <div className="p-4 text-center text-sm text-slate-500">Không có thông báo nào.</div>
                       ) : (
                         notifications.map(n => (
-                          <div 
-                            key={n.id} 
+                          <div
+                            key={n.id}
                             onClick={() => !n.isRead && markAsRead(n.id)}
                             className={`p-4 border-b border-slate-50 cursor-pointer hover:bg-slate-50 transition-colors ${!n.isRead ? 'bg-indigo-50/50' : ''}`}
                           >
@@ -261,7 +262,7 @@ const Layout = () => {
         {/* Main Content */}
         <main className="flex-1 relative overflow-y-auto bg-slate-50 p-4 lg:p-8">
           <div className="animate-fade-in-up max-w-7xl mx-auto">
-             <Outlet />
+            <Outlet />
           </div>
         </main>
 
@@ -278,9 +279,9 @@ const Layout = () => {
                   {notifications.find(n => !n.isRead && !n.hidePopup)?.message}
                 </p>
                 <div className="flex items-center space-x-2 pt-4">
-                  <input 
-                    type="checkbox" 
-                    id="hidePopup" 
+                  <input
+                    type="checkbox"
+                    id="hidePopup"
                     className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
                     onChange={(e) => {
                       if (e.target.checked) {
@@ -295,8 +296,8 @@ const Layout = () => {
                 </div>
               </div>
               <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end">
-                <button 
-                  onClick={() => setShowNotificationPopup(false)} 
+                <button
+                  onClick={() => setShowNotificationPopup(false)}
                   className="px-6 py-2 text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 font-medium transition-colors"
                 >
                   Đóng
@@ -320,43 +321,43 @@ const Layout = () => {
             <form onSubmit={handleChangePassword} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu cũ</label>
-                <input 
-                  type="password" 
+                <input
+                  type="password"
                   required
                   className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                   value={passwordData.oldPassword}
-                  onChange={e => setPasswordData({...passwordData, oldPassword: e.target.value})}
+                  onChange={e => setPasswordData({ ...passwordData, oldPassword: e.target.value })}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu mới</label>
-                <input 
-                  type="password" 
+                <input
+                  type="password"
                   required
                   className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                   value={passwordData.newPassword}
-                  onChange={e => setPasswordData({...passwordData, newPassword: e.target.value})}
+                  onChange={e => setPasswordData({ ...passwordData, newPassword: e.target.value })}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Xác nhận mật khẩu mới</label>
-                <input 
-                  type="password" 
+                <input
+                  type="password"
                   required
                   className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                   value={passwordData.confirmPassword}
-                  onChange={e => setPasswordData({...passwordData, confirmPassword: e.target.value})}
+                  onChange={e => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
                 />
               </div>
               <div className="pt-4 flex justify-end space-x-3">
-                <button 
+                <button
                   type="button"
-                  onClick={() => setShowPasswordModal(false)} 
+                  onClick={() => setShowPasswordModal(false)}
                   className="px-4 py-2 text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 font-medium transition-colors"
                 >
                   Hủy
                 </button>
-                <button 
+                <button
                   type="submit"
                   className="px-4 py-2 text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 font-medium transition-colors"
                 >

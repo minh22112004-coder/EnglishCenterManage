@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Filter, MoreVertical, Edit2, Trash2, Download, Upload, RefreshCw } from 'lucide-react';
+import { Search, Plus, Filter, MoreVertical, Edit2, Trash2, Download, Upload, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import axios from 'axios';
 import * as xlsx from 'xlsx';
 import StudentAttendanceModal from '../components/StudentAttendanceModal';
 import Pagination from '../components/Pagination';
+import ChangeRoleModal from '../components/ChangeRoleModal';
 
 interface Student {
   id: number;
   fullName: string;
   parentName: string;
   parentPhoneNumber: string;
-  classId: number;
+  classId?: number | null;
+  className?: string | null;
   totalRemainingSessions: number;
   totalAttendedSessions: number;
   totalPaidSessions: number;
@@ -37,6 +39,22 @@ const StudentList = () => {
   const [selectedStudentForAttendance, setSelectedStudentForAttendance] = useState<Student | null>(null);
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
   const [showQuickSelect, setShowQuickSelect] = useState(false);
+  const [showChangeRoleModal, setShowChangeRoleModal] = useState(false);
+  const [userForChangeRole, setUserForChangeRole] = useState<any>(null);
+
+  const handleOpenChangeRoleForParent = (student: Student) => {
+    if (!student.parentPhoneNumber) {
+      alert("Học sinh này chưa có số điện thoại phụ huynh.");
+      return;
+    }
+    setUserForChangeRole({
+      id: student.parentPhoneNumber,
+      fullName: student.parentName,
+      phoneNumber: student.parentPhoneNumber,
+      roles: ['User']
+    });
+    setShowChangeRoleModal(true);
+  };
   
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
@@ -225,7 +243,7 @@ const StudentList = () => {
       const token = localStorage.getItem('token');
       const payload = {
         ...formData,
-        classId: parseInt(formData.classId),
+        classId: formData.classId ? parseInt(formData.classId) : null,
         totalRemainingSessions: formData.totalRemainingSessions,
         dateOfBirth: new Date().toISOString()
       };
@@ -519,7 +537,20 @@ const StudentList = () => {
                     />
                   </td>
                   <td className="p-4 text-slate-500 font-medium">#{student.id}</td>
-                  <td className="p-4 font-bold text-slate-800">{student.fullName}</td>
+                  <td className="p-4">
+                    <div className="font-bold text-slate-800">{student.fullName}</div>
+                    <div className="text-xs font-normal mt-0.5">
+                      {student.className ? (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-purple-50 text-purple-700 border border-purple-100">
+                          {student.className}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-500">
+                          Chưa có lớp
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="p-4 text-slate-600">{student.parentName}</td>
                   <td className="p-4 text-slate-600">{student.parentPhoneNumber}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-center">
@@ -539,6 +570,15 @@ const StudentList = () => {
                   </td>
                   <td className="p-4 text-right">
                     <div className="flex items-center justify-end space-x-2">
+                      {isAdmin && student.parentPhoneNumber && (
+                        <button
+                          onClick={() => handleOpenChangeRoleForParent(student)}
+                          title={`Chỉnh vai trò phụ huynh "${student.parentName || student.parentPhoneNumber}" (Nâng lên Giáo viên / Kiêm nhiệm)`}
+                          className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                        >
+                          <ArrowLeftRight size={16} />
+                        </button>
+                      )}
                       <button 
                         onClick={() => {
                           setEditStudentData(student);
@@ -602,8 +642,8 @@ const StudentList = () => {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Chọn Lớp</label>
-                  <select required value={formData.classId} onChange={e => setFormData({...formData, classId: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500/50">
-                    <option value="">-- Chọn Lớp --</option>
+                  <select value={formData.classId} onChange={e => setFormData({...formData, classId: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500/50">
+                    <option value="">-- Chưa xếp lớp --</option>
                     {classes.map(c => (
                       <option key={c.id} value={c.id}>{c.className}</option>
                     ))}
@@ -656,8 +696,8 @@ const StudentList = () => {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Chọn Lớp</label>
-                  <select required value={editStudentData.classId} onChange={e => setEditStudentData({...editStudentData, classId: parseInt(e.target.value)})} className="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500/50">
-                    <option value="">-- Chọn Lớp --</option>
+                  <select value={editStudentData.classId || ''} onChange={e => setEditStudentData({...editStudentData, classId: e.target.value ? parseInt(e.target.value) : null})} className="w-full border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500/50">
+                    <option value="">-- Chưa xếp lớp --</option>
                     {classes.map(c => (
                       <option key={c.id} value={c.id}>{c.className}</option>
                     ))}
@@ -689,6 +729,19 @@ const StudentList = () => {
           student={selectedStudentForAttendance} 
         />
       )}
+
+      {/* Change Role Modal */}
+      <ChangeRoleModal
+        isOpen={showChangeRoleModal}
+        onClose={() => {
+          setShowChangeRoleModal(false);
+          setUserForChangeRole(null);
+        }}
+        user={userForChangeRole}
+        onSuccess={() => {
+          fetchStudents();
+        }}
+      />
     </div>
   );
 };

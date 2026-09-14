@@ -54,6 +54,11 @@ namespace ManagementSystem.Api.Controllers
 
                 if (existingAttendance != null)
                 {
+                    if (existingAttendance.ClassId == null)
+                    {
+                        existingAttendance.ClassId = dto.ClassId ?? student.ClassId;
+                    }
+
                     // Nếu đổi trạng thái
                     if (existingAttendance.IsPresent != dto.IsPresent)
                     {
@@ -67,10 +72,11 @@ namespace ManagementSystem.Api.Controllers
                 }
                 else
                 {
-                    // Tạo mới
+                    // Tạo mới (SC-04: Lưu snapshot ClassId tại thời điểm điểm danh)
                     var attendance = new Attendance
                     {
                         StudentId = dto.StudentId,
+                        ClassId = dto.ClassId ?? student.ClassId,
                         Date = DateTime.SpecifyKind(dto.Date, DateTimeKind.Utc), // Giữ nguyên time client gửi (đã chuẩn hoá UTC+7) để lưu
                         IsPresent = dto.IsPresent
                     };

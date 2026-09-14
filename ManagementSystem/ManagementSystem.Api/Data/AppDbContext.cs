@@ -30,6 +30,25 @@ namespace ManagementSystem.Api.Data
             // Global Query Filters cho Soft Delete
             builder.Entity<Class>().HasQueryFilter(c => !c.IsDeleted);
             builder.Entity<Student>().HasQueryFilter(s => !s.IsDeleted);
+
+            // Mối quan hệ và DeleteBehavior an toàn (SC-01, SC-03, SC-10)
+            builder.Entity<Student>()
+                .HasOne(s => s.Class)
+                .WithMany(c => c.Students)
+                .HasForeignKey(s => s.ClassId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            builder.Entity<Attendance>()
+                .HasOne(a => a.Student)
+                .WithMany(s => s.Attendances)
+                .HasForeignKey(a => a.StudentId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            builder.Entity<Attendance>()
+                .HasOne(a => a.Class)
+                .WithMany()
+                .HasForeignKey(a => a.ClassId)
+                .OnDelete(DeleteBehavior.SetNull);
         }
 
         public override int SaveChanges()
