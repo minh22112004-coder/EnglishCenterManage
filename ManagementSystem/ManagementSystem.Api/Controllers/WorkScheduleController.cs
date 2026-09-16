@@ -156,13 +156,6 @@ namespace ManagementSystem.Api.Controllers
                 if (dto.ClassIds != null && dto.ClassIds.Any())
                 {
                     schedule.Classes = await _context.Classes.Where(c => dto.ClassIds.Contains(c.Id)).ToListAsync();
-                    if (!string.IsNullOrWhiteSpace(dto.TimeSlot))
-                    {
-                        foreach (var c in schedule.Classes)
-                        {
-                            c.TimeSlots = dto.TimeSlot;
-                        }
-                    }
                 }
 
                 if (dto.Tasks != null && dto.Tasks.Any())
@@ -260,14 +253,6 @@ namespace ManagementSystem.Api.Controllers
                     else
                     {
                         await _context.Entry(schedule).Collection(w => w.Classes).LoadAsync();
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(dto.TimeSlot) && schedule.Classes.Any())
-                    {
-                        foreach (var c in schedule.Classes)
-                        {
-                            c.TimeSlots = dto.TimeSlot;
-                        }
                     }
 
                     if (dto.Tasks != null)
