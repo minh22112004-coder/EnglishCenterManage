@@ -5,8 +5,11 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using System.Security.Claims;
 using ManagementSystem.Api.Data;
 using ManagementSystem.Api.Models;
+using ManagementSystem.Api.Constants;
+using ManagementSystem.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,8 +50,11 @@ builder.Services.AddRateLimiter(options =>
     };
 });
 
-builder.Services.AddDbContextPool<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+builder.Services.AddDbContextFactory<AppDbContext>(options =>
+    options.UseNpgsql(connectionString));
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(connectionString), ServiceLifetime.Scoped, ServiceLifetime.Singleton);
 
 builder.Services.AddIdentity<AppUser, IdentityRole>(options =>
 {
@@ -78,9 +84,38 @@ builder.Services.AddAuthentication(options =>
         ValidAudience = builder.Configuration["Jwt:Audience"] ?? "https://localhost:5001",
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? "super_secret_key_12345678901234567890"))
     };
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = async context =>
+        {
+            var userManager = context.HttpContext.RequestServices.GetRequiredService<UserManager<AppUser>>();
+            var userId = context.Principal?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var stampClaim = context.Principal?.FindFirst("SecurityStamp")?.Value;
+
+            if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(stampClaim))
+            {
+                context.Fail("Invalid token claims.");
+                return;
+            }
+
+            var user = await userManager.FindByIdAsync(userId);
+            if (user == null || user.SecurityStamp != stampClaim)
+            {
+                context.Fail("Token has been revoked or user not found.");
+                return;
+            }
+
+            if (userManager.SupportsUserLockout && await userManager.IsLockedOutAsync(user))
+            {
+                context.Fail("Tài khoản đang bị tạm khóa.");
+                return;
+            }
+        }
+    };
 });
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IAttendanceService, AttendanceService>();
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();

@@ -5,6 +5,7 @@ namespace ManagementSystem.Api.Models
         public int Id { get; set; }
         public int StudentId { get; set; }
         public DateTime Date { get; set; }
+        public DateOnly AttendanceDay { get; set; }
         public bool IsPresent { get; set; }
 
         public int? ClassId { get; set; }

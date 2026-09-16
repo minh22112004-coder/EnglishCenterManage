@@ -3,6 +3,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ManagementSystem.Api.Data;
 using ManagementSystem.Api.Models;
+using ManagementSystem.Api.Constants;
+using System.Security.Claims;
+using ManagementSystem.Api.Common;
 
 namespace ManagementSystem.Api.Controllers
 {
@@ -21,17 +24,106 @@ namespace ManagementSystem.Api.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<ClassResponseDto>>> GetClasses()
         {
-            return await _context.Classes
-                .Select(c => new ClassResponseDto
+            if (User.IsInRole(AppRoles.Admin))
+            {
+                return await _context.Classes
+                    .Select(c => new ClassResponseDto
+                    {
+                        Id = c.Id,
+                        ClassCode = c.ClassCode,
+                        ClassName = c.ClassName,
+                        TotalSessions = c.TotalSessions,
+                        TimeSlots = c.TimeSlots,
+                        StudentIds = c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
+                    })
+                    .ToListAsync();
+            }
+
+            if (User.IsInRole(AppRoles.Lecture))
+            {
+                var userId = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+                var assignedClassIds = await _context.WorkSchedules
+                    .Where(w => w.UserId == userId)
+                    .SelectMany(w => w.Classes.Select(c => c.Id))
+                    .Distinct()
+                    .ToListAsync();
+
+                var ownChildClassIds = new List<int>();
+                string? userPhone = null;
+                if (User.IsInRole(AppRoles.User))
+                {
+                    userPhone = PhoneHelper.NormalizePhone(User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.MobilePhone)?.Value ?? User.Identity?.Name);
+                    if (!string.IsNullOrEmpty(userPhone))
+                    {
+                        ownChildClassIds = await _context.Students
+                            .Where(s => s.ParentPhoneCanonical == userPhone && !s.IsDeleted && s.ClassId != null)
+                            .Select(s => s.ClassId!.Value)
+                            .Distinct()
+                            .ToListAsync();
+                    }
+                }
+
+                var allowedClassIds = assignedClassIds.Union(ownChildClassIds).Distinct().ToList();
+
+                var classes = await _context.Classes
+                    .Where(c => allowedClassIds.Contains(c.Id))
+                    .Include(c => c.Students.Where(s => !s.IsDeleted))
+                    .ToListAsync();
+
+                var result = classes.Select(c =>
+                {
+                    bool isAssigned = assignedClassIds.Contains(c.Id);
+                    var studentIds = isAssigned
+                        ? c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
+                        : c.Students.Where(s => !s.IsDeleted && s.ParentPhoneCanonical == userPhone).Select(s => s.Id).ToList();
+
+                    return new ClassResponseDto
+                    {
+                        Id = c.Id,
+                        ClassCode = c.ClassCode,
+                        ClassName = c.ClassName,
+                        TotalSessions = c.TotalSessions,
+                        TimeSlots = c.TimeSlots,
+                        StudentIds = studentIds
+                    };
+                }).ToList();
+
+                return Ok(result);
+            }
+
+            if (User.IsInRole(AppRoles.User))
+            {
+                var userPhone = PhoneHelper.NormalizePhone(User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.MobilePhone)?.Value ?? User.Identity?.Name);
+                if (string.IsNullOrEmpty(userPhone))
+                {
+                    return Forbid();
+                }
+
+                var ownChildClassIds = await _context.Students
+                    .Where(s => s.ParentPhoneCanonical == userPhone && !s.IsDeleted && s.ClassId != null)
+                    .Select(s => s.ClassId!.Value)
+                    .Distinct()
+                    .ToListAsync();
+
+                var classes = await _context.Classes
+                    .Where(c => ownChildClassIds.Contains(c.Id))
+                    .Include(c => c.Students.Where(s => !s.IsDeleted && s.ParentPhoneCanonical == userPhone))
+                    .ToListAsync();
+
+                var result = classes.Select(c => new ClassResponseDto
                 {
                     Id = c.Id,
                     ClassCode = c.ClassCode,
                     ClassName = c.ClassName,
                     TotalSessions = c.TotalSessions,
                     TimeSlots = c.TimeSlots,
-                    StudentIds = c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
-                })
-                .ToListAsync();
+                    StudentIds = c.Students.Select(s => s.Id).ToList()
+                }).ToList();
+
+                return Ok(result);
+            }
+
+            return Forbid();
         }
 
         [HttpGet("{id}")]
@@ -46,19 +138,78 @@ namespace ManagementSystem.Api.Controllers
                 return NotFound();
             }
 
-            return new ClassResponseDto
+            if (User.IsInRole(AppRoles.Admin))
             {
-                Id = c.Id,
-                ClassCode = c.ClassCode,
-                ClassName = c.ClassName,
-                TotalSessions = c.TotalSessions,
-                TimeSlots = c.TimeSlots,
-                StudentIds = c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
-            };
+                return new ClassResponseDto
+                {
+                    Id = c.Id,
+                    ClassCode = c.ClassCode,
+                    ClassName = c.ClassName,
+                    TotalSessions = c.TotalSessions,
+                    TimeSlots = c.TimeSlots,
+                    StudentIds = c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
+                };
+            }
+
+            if (User.IsInRole(AppRoles.Lecture))
+            {
+                var userId = User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+                bool isAssigned = await _context.WorkSchedules
+                    .AnyAsync(w => w.UserId == userId && w.Classes.Any(cls => cls.Id == id));
+
+                var userPhone = PhoneHelper.NormalizePhone(User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.MobilePhone)?.Value ?? User.Identity?.Name);
+                bool hasOwnChild = User.IsInRole(AppRoles.User) && !string.IsNullOrEmpty(userPhone) && c.Students.Any(s => !s.IsDeleted && s.ParentPhoneCanonical == userPhone);
+
+                if (!isAssigned && !hasOwnChild)
+                {
+                    return Forbid();
+                }
+
+                var studentIds = isAssigned
+                    ? c.Students.Where(s => !s.IsDeleted).Select(s => s.Id).ToList()
+                    : c.Students.Where(s => !s.IsDeleted && s.ParentPhoneCanonical == userPhone).Select(s => s.Id).ToList();
+
+                return new ClassResponseDto
+                {
+                    Id = c.Id,
+                    ClassCode = c.ClassCode,
+                    ClassName = c.ClassName,
+                    TotalSessions = c.TotalSessions,
+                    TimeSlots = c.TimeSlots,
+                    StudentIds = studentIds
+                };
+            }
+
+            if (User.IsInRole(AppRoles.User))
+            {
+                var userPhone = PhoneHelper.NormalizePhone(User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.MobilePhone)?.Value ?? User.Identity?.Name);
+                if (string.IsNullOrEmpty(userPhone))
+                {
+                    return Forbid();
+                }
+
+                var ownStudents = c.Students.Where(s => !s.IsDeleted && s.ParentPhoneCanonical == userPhone).ToList();
+                if (!ownStudents.Any())
+                {
+                    return Forbid();
+                }
+
+                return new ClassResponseDto
+                {
+                    Id = c.Id,
+                    ClassCode = c.ClassCode,
+                    ClassName = c.ClassName,
+                    TotalSessions = c.TotalSessions,
+                    TimeSlots = c.TimeSlots,
+                    StudentIds = ownStudents.Select(s => s.Id).ToList()
+                };
+            }
+
+            return Forbid();
         }
 
         [HttpPost]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = AppRoles.Admin)]
         public async Task<ActionResult<ClassResponseDto>> PostClass(ClassDto classDto)
         {
             // Kiểm tra trùng lặp học sinh đang thuộc lớp khác (SC-02)
@@ -109,7 +260,7 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpPut("{id}")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = AppRoles.Admin)]
         public async Task<IActionResult> PutClass(int id, ClassDto classDto)
         {
             var existingClass = await _context.Classes.FindAsync(id);
@@ -161,7 +312,7 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpDelete("{id}")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = AppRoles.Admin)]
         public async Task<IActionResult> DeleteClass(int id)
         {
             var existingClass = await _context.Classes.FindAsync(id);
@@ -185,11 +336,12 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpGet("{id}/attendances")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = AppRoles.Admin)]
         public async Task<IActionResult> GetClassAttendances(int id)
         {
             // Lọc theo ClassId của Attendance (SC-04: bảo toàn lịch sử khi học sinh chuyển lớp)
             var attendances = await _context.Attendances
+                .IgnoreQueryFilters()
                 .Include(a => a.Student)
                 .Where(a => a.ClassId == id || (a.ClassId == null && a.Student.ClassId == id))
                 .OrderByDescending(a => a.Date)

@@ -5,11 +5,13 @@ using Microsoft.EntityFrameworkCore;
 using ManagementSystem.Api.Data;
 using ManagementSystem.Api.Models;
 
+using ManagementSystem.Api.Constants;
+
 namespace ManagementSystem.Api.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "User,Lecture,Admin")]
+    [Authorize(Roles = AppRoles.All)]
     public class NotificationController : ControllerBase
     {
         private readonly AppDbContext _context;

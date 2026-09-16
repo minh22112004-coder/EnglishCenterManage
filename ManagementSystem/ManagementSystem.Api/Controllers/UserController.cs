@@ -5,12 +5,14 @@ using Microsoft.EntityFrameworkCore;
 using System.Text.RegularExpressions;
 using ManagementSystem.Api.Data;
 using ManagementSystem.Api.Models;
+using ManagementSystem.Api.Constants;
+using ManagementSystem.Api.Common;
 
 namespace ManagementSystem.Api.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = AppRoles.Admin)]
     public class UserController : ControllerBase
     {
         private readonly UserManager<AppUser> _userManager;
@@ -25,12 +27,9 @@ namespace ManagementSystem.Api.Controllers
         [HttpGet("lectures")]
         public async Task<IActionResult> GetLectures()
         {
-            var users = await _userManager.GetUsersInRoleAsync("Lecture");
-            
+            var users = await _userManager.GetUsersInRoleAsync(AppRoles.Lecture);
+
             // Lấy danh sách lịch dạy hôm nay
-            var today = DateTime.UtcNow.Date; 
-            // Cẩn thận múi giờ, ở đây lấy tạm UtcNow.Date hoặc có thể pass từ frontend lên. 
-            // Tạm thời lấy Date == DateTime.Today theo local server.
             var todayLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time")).Date;
             var todayUtc = DateTime.SpecifyKind(todayLocal, DateTimeKind.Utc);
 
@@ -63,111 +62,277 @@ namespace ManagementSystem.Api.Controllers
             return Ok(result);
         }
 
-        private static string NormalizePhone(string? rawPhone)
-        {
-            if (string.IsNullOrWhiteSpace(rawPhone)) return "";
-            var cleaned = Regex.Replace(rawPhone, @"[\s\.\-\(\)\+]+", "");
-            var match = Regex.Match(cleaned, @"(0|84)\d{9}");
-            if (!match.Success) return "";
-            var phoneStr = match.Value;
-            if (phoneStr.StartsWith("84") && phoneStr.Length == 11)
-                return "0" + phoneStr.Substring(2);
-            return phoneStr;
-        }
-
         [HttpPost("lectures")]
         public async Task<IActionResult> CreateLecture([FromBody] LectureDto dto)
         {
-            var newPhone = NormalizePhone(dto.PhoneNumber);
-            if (string.IsNullOrEmpty(newPhone))
+            if (!PhoneHelper.TryNormalizePhone(dto.PhoneNumber, out var newPhone) || string.IsNullOrEmpty(newPhone))
                 return BadRequest(new { message = "Số điện thoại không hợp lệ hoặc không đúng định dạng." });
 
-            var existingUser = await _userManager.FindByNameAsync(newPhone);
+            var existingUser = await _userManager.Users.FirstOrDefaultAsync(u => u.CanonicalPhone == newPhone)
+                               ?? await _userManager.FindByNameAsync(newPhone);
             if (existingUser != null)
             {
-                // Người dùng đã tồn tại (VD: đã là User/Phụ huynh), gán thêm quyền Lecture và cập nhật thông tin
-                if (!await _userManager.IsInRoleAsync(existingUser, "Lecture"))
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                try
                 {
-                    await _userManager.AddToRoleAsync(existingUser, "Lecture");
-                }
-                
-                existingUser.FullName = dto.FullName ?? existingUser.FullName;
-                existingUser.PhoneNumber = newPhone;
-                existingUser.BankNumber = dto.BankNumber ?? existingUser.BankNumber;
-                existingUser.BankName = dto.BankName ?? existingUser.BankName;
-                if (!string.IsNullOrEmpty(dto.QrCodeImage)) existingUser.QrCodeImage = dto.QrCodeImage;
+                    // Người dùng đã tồn tại (VD: đã là User/Phụ huynh), gán thêm quyền Lecture và cập nhật thông tin
+                    if (!await _userManager.IsInRoleAsync(existingUser, AppRoles.Lecture))
+                    {
+                        var addRes = await _userManager.AddToRoleAsync(existingUser, AppRoles.Lecture);
+                        if (!addRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(addRes.Errors);
+                        }
+                    }
 
-                // Mở khóa tài khoản nếu đang bị Lockout (trường hợp phụ huynh cũ bị khóa)
-                if (_userManager.SupportsUserLockout)
+                    existingUser.FullName = dto.FullName ?? existingUser.FullName;
+                    existingUser.PhoneNumber = newPhone;
+                    existingUser.BankNumber = dto.BankNumber ?? existingUser.BankNumber;
+                    existingUser.BankName = dto.BankName ?? existingUser.BankName;
+                    if (!string.IsNullOrEmpty(dto.QrCodeImage)) existingUser.QrCodeImage = dto.QrCodeImage;
+
+                    // Mở khóa tài khoản nếu đang bị Lockout (trường hợp phụ huynh cũ bị khóa)
+                    if (_userManager.SupportsUserLockout)
+                    {
+                        var unlockRes = await _userManager.SetLockoutEndDateAsync(existingUser, null);
+                        if (!unlockRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(unlockRes.Errors);
+                        }
+                        var resetFailRes = await _userManager.ResetAccessFailedCountAsync(existingUser);
+                        if (!resetFailRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(resetFailRes.Errors);
+                        }
+                    }
+
+                    var stampRes = await _userManager.UpdateSecurityStampAsync(existingUser);
+                    if (!stampRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(stampRes.Errors);
+                    }
+
+                    var updateRes = await _userManager.UpdateAsync(existingUser);
+                    if (!updateRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(updateRes.Errors);
+                    }
+
+                    await transaction.CommitAsync();
+                    return Ok(new { message = "Số điện thoại đã tồn tại trong hệ thống. Đã tích hợp thêm quyền Giáo viên và kích hoạt tài khoản.", id = existingUser.Id });
+                }
+                catch (Exception ex) when (DbErrorHelper.IsUniqueViolation(ex))
                 {
-                    await _userManager.SetLockoutEndDateAsync(existingUser, null);
-                    await _userManager.ResetAccessFailedCountAsync(existingUser);
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return Conflict(new { message = "Số điện thoại hoặc thông tin bị trùng lặp trong hệ thống." });
                 }
-
-                await _userManager.UpdateAsync(existingUser);
-                
-                return Ok(new { message = "Số điện thoại đã tồn tại trong hệ thống. Đã tích hợp thêm quyền Giáo viên và kích hoạt tài khoản.", id = existingUser.Id });
+                catch (Exception)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Lỗi khi cập nhật giáo viên." });
+                }
             }
 
-            var user = new AppUser
+            using var transactionNew = await _context.Database.BeginTransactionAsync();
+            try
             {
-                UserName = newPhone,
-                Email = newPhone + "@example.com",
-                PhoneNumber = newPhone,
-                FullName = dto.FullName,
-                BankNumber = dto.BankNumber,
-                BankName = dto.BankName,
-                QrCodeImage = dto.QrCodeImage
-            };
+                var user = new AppUser
+                {
+                    UserName = newPhone,
+                    Email = newPhone + "@example.com",
+                    PhoneNumber = newPhone,
+                    FullName = dto.FullName,
+                    BankNumber = dto.BankNumber,
+                    BankName = dto.BankName,
+                    QrCodeImage = dto.QrCodeImage
+                };
 
-            var password = newPhone + "@123Aa"; // Mật khẩu mặc định
-            var result = await _userManager.CreateAsync(user, password);
+                var createRes = await _userManager.CreateAsync(user, newPhone + "@123Aa");
+                if (!createRes.Succeeded)
+                {
+                    await transactionNew.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(createRes.Errors);
+                }
 
-            if (result.Succeeded)
-            {
-                await _userManager.AddToRoleAsync(user, "Lecture");
+                var addRoleRes = await _userManager.AddToRoleAsync(user, AppRoles.Lecture);
+                if (!addRoleRes.Succeeded)
+                {
+                    await transactionNew.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(addRoleRes.Errors);
+                }
+
+                await transactionNew.CommitAsync();
                 return Ok(new { message = "Tạo giáo viên thành công", id = user.Id });
             }
-
-            var errors = string.Join(", ", result.Errors.Select(e => e.Description));
-            return BadRequest(new { message = $"Lỗi tạo giáo viên: {errors}" });
+            catch (Exception ex) when (DbErrorHelper.IsUniqueViolation(ex))
+            {
+                await transactionNew.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return Conflict(new { message = "Số điện thoại hoặc thông tin bị trùng lặp trong hệ thống." });
+            }
+            catch (Exception)
+            {
+                await transactionNew.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Lỗi khi tạo giáo viên." });
+            }
         }
 
         [HttpPut("lectures/{id}")]
         public async Task<IActionResult> UpdateLecture(string id, [FromBody] LectureDto dto)
         {
-            var user = await _userManager.FindByIdAsync(id);
-            if (user == null) return NotFound();
-
-            var newPhone = NormalizePhone(dto.PhoneNumber);
-            if (string.IsNullOrEmpty(newPhone))
+            if (!PhoneHelper.TryNormalizePhone(dto.PhoneNumber, out var newPhone) || string.IsNullOrEmpty(newPhone))
                 return BadRequest(new { message = "Số điện thoại không hợp lệ hoặc không đúng định dạng." });
 
-            // Đồng bộ UserName & Email nếu SĐT thay đổi
-            if (user.UserName != newPhone)
+            using var transaction = await _context.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            try
             {
-                // Kiểm tra SĐT mới chưa có ai dùng
-                var conflictUser = await _userManager.FindByNameAsync(newPhone);
-                if (conflictUser != null && conflictUser.Id != user.Id)
-                    return Conflict(new { message = "Số điện thoại mới đã được dùng bởi tài khoản khác." });
+                var user = await _context.Users.FromSqlRaw("SELECT * FROM \"AspNetUsers\" WHERE \"Id\" = {0} FOR UPDATE", id).SingleOrDefaultAsync();
+                if (user == null)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return NotFound();
+                }
 
-                await _userManager.SetUserNameAsync(user, newPhone);
-                await _userManager.SetEmailAsync(user, newPhone + "@example.com");
-            }
+                var roleNames = await (from ur in _context.UserRoles
+                                       join r in _context.Roles on ur.RoleId equals r.Id
+                                       where ur.UserId == user.Id
+                                       select r.Name).ToListAsync();
 
-            user.PhoneNumber = newPhone;
-            user.FullName = dto.FullName;
-            user.BankNumber = dto.BankNumber;
-            user.BankName = dto.BankName;
-            if (!string.IsNullOrEmpty(dto.QrCodeImage)) user.QrCodeImage = dto.QrCodeImage;
+                if (!roleNames.Contains(AppRoles.Lecture))
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return NotFound(new { message = "Không tìm thấy tài khoản giáo viên." });
+                }
 
-            var result = await _userManager.UpdateAsync(user);
-            if (result.Succeeded)
-            {
+                bool isDualRole = roleNames.Contains(AppRoles.User);
+
+                var oldPhone = user.CanonicalPhone ?? PhoneHelper.NormalizePhone(user.PhoneNumber);
+                if (string.IsNullOrEmpty(oldPhone))
+                    oldPhone = PhoneHelper.NormalizePhone(user.UserName);
+
+                bool phoneChanged = (!string.IsNullOrEmpty(oldPhone) && oldPhone != newPhone) || user.UserName != newPhone;
+
+                if (phoneChanged)
+                {
+                    var conflictExists = await _context.Users
+                        .AsNoTracking()
+                        .AnyAsync(u => u.Id != user.Id && u.CanonicalPhone == newPhone);
+
+                    if (conflictExists)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return Conflict(new { message = "Số điện thoại mới đã được dùng bởi tài khoản khác." });
+                    }
+
+                    if (isDualRole && !string.IsNullOrEmpty(oldPhone))
+                    {
+                        var oldChildNames = await _context.Students
+                            .Where(s => s.ParentPhoneCanonical == oldPhone)
+                            .Select(s => s.NormalizedFullName)
+                            .ToListAsync();
+
+                        if (oldChildNames.Count > 0)
+                        {
+                            var collidingChild = await _context.Students
+                                .Where(s => s.ParentPhoneCanonical == newPhone && oldChildNames.Contains(s.NormalizedFullName))
+                                .Select(s => s.FullName)
+                                .FirstOrDefaultAsync();
+
+                            if (collidingChild != null)
+                            {
+                                await transaction.RollbackAsync();
+                                _context.ChangeTracker.Clear();
+                                return Conflict(new { message = $"Học sinh '{collidingChild}' đã tồn tại dưới số điện thoại mới." });
+                            }
+                        }
+
+                        await _context.Students
+                            .IgnoreQueryFilters()
+                            .Where(s => s.ParentPhoneCanonical == oldPhone)
+                            .ExecuteUpdateAsync(setters => setters.SetProperty(s => s.ParentPhoneNumber, newPhone));
+                    }
+
+                    var setUserNameRes = await _userManager.SetUserNameAsync(user, newPhone);
+                    if (!setUserNameRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(setUserNameRes.Errors);
+                    }
+
+                    var setEmailRes = await _userManager.SetEmailAsync(user, newPhone + "@example.com");
+                    if (!setEmailRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(setEmailRes.Errors);
+                    }
+                }
+
+                user.PhoneNumber = newPhone;
+                user.FullName = dto.FullName;
+                user.BankNumber = dto.BankNumber;
+                user.BankName = dto.BankName;
+                if (!string.IsNullOrEmpty(dto.QrCodeImage)) user.QrCodeImage = dto.QrCodeImage;
+
+                if (phoneChanged)
+                {
+                    var stampRes = await _userManager.UpdateSecurityStampAsync(user);
+                    if (!stampRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(stampRes.Errors);
+                    }
+                }
+
+                var result = await _userManager.UpdateAsync(user);
+                if (!result.Succeeded)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(result.Errors);
+                }
+
+                await transaction.CommitAsync();
                 return Ok(new { message = "Cập nhật thành công" });
             }
-
-            return BadRequest(result.Errors);
+            catch (Exception ex) when (DbErrorHelper.IsUniqueViolation(ex))
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return Conflict(new { message = "Số điện thoại hoặc thông tin bị trùng lặp trong hệ thống." });
+            }
+            catch (Exception ex) when (DbErrorHelper.IsTransientConcurrencyError(ex))
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status409Conflict, new { message = "Yêu cầu bị xung đột đồng thời, vui lòng thử lại." });
+            }
+            catch (Exception)
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Lỗi khi cập nhật giáo viên." });
+            }
         }
 
         [HttpPost("lectures/{id}/reset-password")]
@@ -177,74 +342,238 @@ namespace ManagementSystem.Api.Controllers
             if (user == null) return NotFound(new { message = "Không tìm thấy người dùng." });
 
             // Không cho reset tài khoản Admin
-            if (await _userManager.IsInRoleAsync(user, "Admin"))
+            if (await _userManager.IsInRoleAsync(user, AppRoles.Admin))
                 return Forbid();
 
-            var phone = user.PhoneNumber ?? user.UserName ?? "";
+            var phone = user.CanonicalPhone ?? PhoneHelper.NormalizePhone(user.PhoneNumber);
+            if (string.IsNullOrEmpty(phone)) phone = PhoneHelper.NormalizePhone(user.UserName);
+            if (string.IsNullOrEmpty(phone)) phone = user.UserName ?? "";
+
             if (string.IsNullOrEmpty(phone))
-                return BadRequest(new { message = "Không thể xác định SĐT để tạo mật khẩu mặc định." });
+                return BadRequest(new { message = "Không thể xác định SĐT hoặc Username để tạo mật khẩu mặc định." });
 
-            var removeResult = await _userManager.RemovePasswordAsync(user);
-            if (!removeResult.Succeeded)
-                return BadRequest(new { message = "Không thể xóa mật khẩu cũ." });
-
-            var addResult = await _userManager.AddPasswordAsync(user, phone + "@123Aa");
-            if (addResult.Succeeded)
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
             {
+                var resetToken = await _userManager.GeneratePasswordResetTokenAsync(user);
+                var resetResult = await _userManager.ResetPasswordAsync(user, resetToken, phone + "@123Aa");
+                if (!resetResult.Succeeded)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    var errors = string.Join(", ", resetResult.Errors.Select(e => e.Description));
+                    return BadRequest(new { message = $"Reset thất bại: {errors}" });
+                }
+
                 if (_userManager.SupportsUserLockout)
                 {
-                    await _userManager.SetLockoutEndDateAsync(user, null);
-                    await _userManager.ResetAccessFailedCountAsync(user);
+                    var unlockRes = await _userManager.SetLockoutEndDateAsync(user, null);
+                    if (!unlockRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(unlockRes.Errors);
+                    }
+                    var resetFailRes = await _userManager.ResetAccessFailedCountAsync(user);
+                    if (!resetFailRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(resetFailRes.Errors);
+                    }
                 }
+
+                var stampRes = await _userManager.UpdateSecurityStampAsync(user);
+                if (!stampRes.Succeeded)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(stampRes.Errors);
+                }
+
+                await transaction.CommitAsync();
                 return Ok(new { message = $"Đã reset mật khẩu về mặc định: {phone}@123Aa" });
             }
-
-            var errors = string.Join(", ", addResult.Errors.Select(e => e.Description));
-            return BadRequest(new { message = $"Reset thất bại: {errors}" });
+            catch (Exception)
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Lỗi khi reset mật khẩu." });
+            }
         }
 
         [HttpDelete("lectures/{id}")]
         public async Task<IActionResult> DeleteLecture(string id)
         {
-            var user = await _userManager.FindByIdAsync(id);
-            if (user == null) return NotFound();
-
-            var result = await _userManager.DeleteAsync(user);
-            if (result.Succeeded)
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
             {
+                // Khóa dòng AspNetUsers bằng SELECT ... FOR UPDATE để serialize với việc phân công lịch dạy
+                var user = await _context.Users
+                    .FromSqlRaw("SELECT * FROM \"AspNetUsers\" WHERE \"Id\" = {0} FOR UPDATE", id)
+                    .SingleOrDefaultAsync();
+
+                if (user == null)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return NotFound();
+                }
+
+                if (await _userManager.IsInRoleAsync(user, AppRoles.Admin))
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(new { message = "Không thể xóa tài khoản Quản trị viên." });
+                }
+
+                if (!await _userManager.IsInRoleAsync(user, AppRoles.Lecture))
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return NotFound(new { message = "Không tìm thấy tài khoản giáo viên." });
+                }
+
+                var todayLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time")).Date;
+                var todayUtc = DateTime.SpecifyKind(todayLocal, DateTimeKind.Utc);
+                var upcoming = await _context.WorkSchedules
+                    .Where(w => w.UserId == user.Id && w.Date.Date >= todayUtc)
+                    .CountAsync();
+
+                if (upcoming > 0)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return Conflict(new { message = $"Không thể xóa/gỡ giáo viên vì vẫn còn {upcoming} ca dạy chưa hoàn thành từ hôm nay trở đi." });
+                }
+
+                var roles = await _userManager.GetRolesAsync(user);
+
+                // Step 5: Thay thế hard-delete đối với giáo viên kiêm nhiệm bằng việc chỉ gỡ role Lecture
+                if (roles.Contains(AppRoles.User))
+                {
+                    var remResult = await _userManager.RemoveFromRoleAsync(user, AppRoles.Lecture);
+                    if (!remResult.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(remResult.Errors);
+                    }
+
+                    var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+                    if (!stampResult.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(stampResult.Errors);
+                    }
+
+                    await transaction.CommitAsync();
+                    return Ok(new { message = "Đã gỡ vai trò Giáo viên. Tài khoản Phụ huynh vẫn được duy trì." });
+                }
+
+                // Nếu người dùng không còn vai trò nào khác: kiểm tra dữ liệu phụ thuộc
+                var hasSchedules = await _context.WorkSchedules.AnyAsync(w => w.UserId == user.Id);
+                var hasAuditLogs = await _context.AuditLogs.AnyAsync(a => a.UserId == user.Id);
+
+                if (hasSchedules || hasAuditLogs)
+                {
+                    var remResult = await _userManager.RemoveFromRoleAsync(user, AppRoles.Lecture);
+                    if (!remResult.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(remResult.Errors);
+                    }
+
+                    if (_userManager.SupportsUserLockout)
+                    {
+                        var lockoutRes = await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddYears(100));
+                        if (!lockoutRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(lockoutRes.Errors);
+                        }
+                    }
+
+                    var stampResult = await _userManager.UpdateSecurityStampAsync(user);
+                    if (!stampResult.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(stampResult.Errors);
+                    }
+
+                    await transaction.CommitAsync();
+                    return Ok(new { message = "Đã gỡ vai trò Giáo viên, khóa tài khoản và lưu trữ lịch sử." });
+                }
+
+                var delResult = await _userManager.DeleteAsync(user);
+                if (!delResult.Succeeded)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(delResult.Errors);
+                }
+
+                await transaction.CommitAsync();
                 return Ok(new { message = "Xóa giáo viên thành công" });
             }
-
-            return BadRequest(result.Errors);
+            catch (Exception ex) when (DbErrorHelper.IsTransientConcurrencyError(ex))
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status409Conflict, new { message = "Xung đột đồng thời khi xóa giáo viên, vui lòng thử lại." });
+            }
+            catch (Exception)
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Lỗi khi xóa giáo viên." });
+            }
         }
 
         [HttpGet("parents")]
         public async Task<IActionResult> GetParents()
         {
-            var users = await _userManager.GetUsersInRoleAsync("User");
-            var result = new List<ParentResponseDto>();
-
-            var allStudents = await _context.Students
-                .IgnoreQueryFilters()
-                .Include(s => s.Class)
-                .ToListAsync();
-
-            var studentsByPhone = allStudents
-                .Where(s => !string.IsNullOrWhiteSpace(s.ParentPhoneNumber))
-                .GroupBy(s => s.ParentPhoneNumber)
-                .ToDictionary(g => g.Key, g => g.ToList());
-
+            var users = await _userManager.GetUsersInRoleAsync(AppRoles.User);
+            var nonAdminParents = new List<AppUser>();
             foreach (var u in users)
             {
-                if (await _userManager.IsInRoleAsync(u, "Admin"))
-                    continue;
+                if (!await _userManager.IsInRoleAsync(u, AppRoles.Admin))
+                {
+                    nonAdminParents.Add(u);
+                }
+            }
 
+            var parentCanonicalPhones = nonAdminParents
+                .Select(u => u.CanonicalPhone ?? PhoneHelper.NormalizePhone(u.PhoneNumber ?? u.UserName))
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct()
+                .ToList();
+
+            var matchedStudentsList = parentCanonicalPhones.Count > 0
+                ? await _context.Students
+                    .IgnoreQueryFilters()
+                    .Include(s => s.Class)
+                    .Where(s => !string.IsNullOrEmpty(s.ParentPhoneCanonical) && parentCanonicalPhones.Contains(s.ParentPhoneCanonical))
+                    .ToListAsync()
+                : new List<Student>();
+
+            var studentsByCanonicalPhone = matchedStudentsList
+                .GroupBy(s => s.ParentPhoneCanonical)
+                .ToDictionary(g => g.Key!, g => g.ToList(), StringComparer.Ordinal);
+
+            var result = new List<ParentResponseDto>();
+            foreach (var u in nonAdminParents)
+            {
                 var isLocked = _userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(u);
                 var userRoles = (await _userManager.GetRolesAsync(u)).ToList();
 
+                var canonPhone = u.CanonicalPhone ?? PhoneHelper.NormalizePhone(u.PhoneNumber ?? u.UserName);
                 var children = new List<ParentChildItemDto>();
-                var phone = u.PhoneNumber ?? u.UserName ?? "";
-                if (studentsByPhone.TryGetValue(phone, out var matchedStudents))
+                if (!string.IsNullOrEmpty(canonPhone) && studentsByCanonicalPhone.TryGetValue(canonPhone, out var matchedStudents))
                 {
                     children = matchedStudents.Select(s => new ParentChildItemDto
                     {
@@ -283,7 +612,7 @@ namespace ManagementSystem.Api.Controllers
             var isLocked = _userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user);
 
             int upcomingSchedules = 0;
-            if (roles.Contains("Lecture"))
+            if (roles.Contains(AppRoles.Lecture))
             {
                 var todayLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time")).Date;
                 var todayUtc = DateTime.SpecifyKind(todayLocal, DateTimeKind.Utc);
@@ -293,11 +622,13 @@ namespace ManagementSystem.Api.Controllers
                     .CountAsync();
             }
 
-            var phone = user.PhoneNumber ?? user.UserName ?? "";
-            var children = await _context.Students
-                .Where(s => s.ParentPhoneNumber == phone)
-                .Select(s => s.FullName)
-                .ToListAsync();
+            var canonPhone = user.CanonicalPhone ?? PhoneHelper.NormalizePhone(user.PhoneNumber ?? user.UserName);
+            var children = !string.IsNullOrEmpty(canonPhone)
+                ? await _context.Students
+                    .Where(s => !s.IsDeleted && s.ParentPhoneCanonical == canonPhone)
+                    .Select(s => s.FullName)
+                    .ToListAsync()
+                : new List<string>();
 
             return Ok(new UserRoleSummaryDto
             {
@@ -316,122 +647,209 @@ namespace ManagementSystem.Api.Controllers
         [HttpPost("{id}/change-role")]
         public async Task<IActionResult> ChangeRole(string id, [FromBody] ChangeRoleDto dto)
         {
-            var user = await _userManager.FindByIdAsync(id)
-                       ?? await _userManager.FindByNameAsync(id)
-                       ?? await _userManager.Users.FirstOrDefaultAsync(u => u.PhoneNumber == id);
-            if (user == null) return NotFound(new { message = "Không tìm thấy người dùng." });
-
-            if (await _userManager.IsInRoleAsync(user, "Admin"))
-            {
-                return BadRequest(new { message = "Không thể thay đổi vai trò của tài khoản Quản trị viên (Admin)." });
-            }
-
             var validRoles = new[] { "Lecture", "User", "Both" };
             if (!validRoles.Contains(dto.TargetRole))
             {
                 return BadRequest(new { message = "Vai trò đích không hợp lệ. Chỉ chấp nhận: Lecture, User, hoặc Both." });
             }
 
-            var currentRoles = await _userManager.GetRolesAsync(user);
-            string warningMessage = "";
+            var initialUser = await _userManager.FindByIdAsync(id)
+                       ?? await _userManager.FindByNameAsync(id)
+                       ?? await _userManager.Users.FirstOrDefaultAsync(u => u.PhoneNumber == id);
+            if (initialUser == null) return NotFound(new { message = "Không tìm thấy người dùng." });
 
-            if (dto.TargetRole == "Lecture")
+            if (await _userManager.IsInRoleAsync(initialUser, AppRoles.Admin))
             {
-                if (currentRoles.Contains("User"))
-                {
-                    await _userManager.RemoveFromRoleAsync(user, "User");
-                }
-                if (!currentRoles.Contains("Lecture"))
-                {
-                    await _userManager.AddToRoleAsync(user, "Lecture");
-                }
-
-                if (_userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user))
-                {
-                    await _userManager.SetLockoutEndDateAsync(user, null);
-                    await _userManager.ResetAccessFailedCountAsync(user);
-                }
-
-                if (!string.IsNullOrWhiteSpace(dto.BankName)) user.BankName = dto.BankName;
-                if (!string.IsNullOrWhiteSpace(dto.BankNumber)) user.BankNumber = dto.BankNumber;
-                if (!string.IsNullOrWhiteSpace(dto.QrCodeImage)) user.QrCodeImage = dto.QrCodeImage;
-            }
-            else if (dto.TargetRole == "User")
-            {
-                var todayLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time")).Date;
-                var todayUtc = DateTime.SpecifyKind(todayLocal, DateTimeKind.Utc);
-                var upcoming = await _context.WorkSchedules
-                    .Where(w => w.UserId == user.Id && w.Date.Date >= todayUtc)
-                    .CountAsync();
-
-                if (upcoming > 0)
-                {
-                    warningMessage = $" Lưu ý: Người này có {upcoming} ca dạy từ hôm nay trở đi cần được phân công lại.";
-                }
-
-                if (currentRoles.Contains("Lecture"))
-                {
-                    await _userManager.RemoveFromRoleAsync(user, "Lecture");
-                }
-                if (!currentRoles.Contains("User"))
-                {
-                    await _userManager.AddToRoleAsync(user, "User");
-                }
-            }
-            else if (dto.TargetRole == "Both")
-            {
-                if (!currentRoles.Contains("Lecture"))
-                {
-                    await _userManager.AddToRoleAsync(user, "Lecture");
-                }
-                if (!currentRoles.Contains("User"))
-                {
-                    await _userManager.AddToRoleAsync(user, "User");
-                }
-
-                if (_userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user))
-                {
-                    await _userManager.SetLockoutEndDateAsync(user, null);
-                    await _userManager.ResetAccessFailedCountAsync(user);
-                }
-
-                if (!string.IsNullOrWhiteSpace(dto.BankName)) user.BankName = dto.BankName;
-                if (!string.IsNullOrWhiteSpace(dto.BankNumber)) user.BankNumber = dto.BankNumber;
-                if (!string.IsNullOrWhiteSpace(dto.QrCodeImage)) user.QrCodeImage = dto.QrCodeImage;
+                return BadRequest(new { message = "Không thể thay đổi vai trò của tài khoản Quản trị viên (Admin)." });
             }
 
-            if (dto.ResetPasswordToDefault)
+            var desiredRoles = dto.TargetRole switch
             {
-                var phone = user.PhoneNumber ?? user.UserName ?? "";
-                if (!string.IsNullOrEmpty(phone))
-                {
-                    await _userManager.RemovePasswordAsync(user);
-                    await _userManager.AddPasswordAsync(user, phone + "@123Aa");
-                    if (_userManager.SupportsUserLockout)
-                    {
-                        await _userManager.SetLockoutEndDateAsync(user, null);
-                        await _userManager.ResetAccessFailedCountAsync(user);
-                    }
-                }
-            }
-
-            await _userManager.UpdateAsync(user);
-
-            var updatedRoles = await _userManager.GetRolesAsync(user);
-            string roleDescription = dto.TargetRole switch
-            {
-                "Lecture" => "Giáo viên",
-                "User" => "Phụ huynh",
-                "Both" => "Kiêm nhiệm (Giáo viên & Phụ huynh)",
-                _ => dto.TargetRole
+                "Lecture" => new List<string> { AppRoles.Lecture },
+                "User" => new List<string> { AppRoles.User },
+                "Both" => new List<string> { AppRoles.Lecture, AppRoles.User },
+                _ => new List<string>()
             };
 
-            return Ok(new
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
             {
-                message = $"Đã cập nhật vai trò của người dùng thành: {roleDescription}.{warningMessage}",
-                roles = updatedRoles,
-                userId = user.Id
-            });
+                // Khóa dòng AspNetUsers của user bằng SELECT ... FOR UPDATE để serialize với việc phân công lịch dạy
+                var user = await _context.Users
+                    .FromSqlRaw("SELECT * FROM \"AspNetUsers\" WHERE \"Id\" = {0} FOR UPDATE", initialUser.Id)
+                    .SingleOrDefaultAsync();
+
+                if (user == null)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return NotFound(new { message = "Không tìm thấy người dùng." });
+                }
+
+                var currentRoles = await _userManager.GetRolesAsync(user);
+
+                // Step 4: Khi chuyển từ Lecture sang User, từ chối với 409 Conflict nếu vẫn còn lịch dạy tương lai
+                bool isDemotingLecture = currentRoles.Contains(AppRoles.Lecture) && !desiredRoles.Contains(AppRoles.Lecture);
+                if (isDemotingLecture)
+                {
+                    var todayLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time")).Date;
+                    var todayUtc = DateTime.SpecifyKind(todayLocal, DateTimeKind.Utc);
+                    var upcoming = await _context.WorkSchedules
+                        .Where(w => w.UserId == user.Id && w.Date.Date >= todayUtc)
+                        .CountAsync();
+
+                    if (upcoming > 0)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return Conflict(new { message = $"Không thể chuyển sang vai trò Phụ huynh vì người này vẫn còn {upcoming} ca dạy chưa hoàn thành từ hôm nay trở đi." });
+                    }
+                }
+
+                // Step 5: Check usable phone/username before state changes if password reset requested
+                var resetPhone = user.CanonicalPhone ?? PhoneHelper.NormalizePhone(user.PhoneNumber);
+                if (string.IsNullOrEmpty(resetPhone)) resetPhone = PhoneHelper.NormalizePhone(user.UserName);
+                if (string.IsNullOrEmpty(resetPhone)) resetPhone = user.UserName ?? "";
+
+                if (dto.ResetPasswordToDefault && string.IsNullOrWhiteSpace(resetPhone))
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(new { message = "Không thể đặt lại mật khẩu mặc định vì người dùng không có số điện thoại hoặc tên đăng nhập hợp lệ." });
+                }
+
+                var toAdd = desiredRoles.Except(currentRoles).ToList();
+                var toRemove = currentRoles.Intersect(new[] { AppRoles.Lecture, AppRoles.User }).Except(desiredRoles).ToList();
+
+                if (toAdd.Any())
+                {
+                    var addRes = await _userManager.AddToRolesAsync(user, toAdd);
+                    if (!addRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(new { message = "Lỗi khi gán vai trò mới.", errors = addRes.Errors });
+                    }
+                }
+
+                if (toRemove.Any())
+                {
+                    var remRes = await _userManager.RemoveFromRolesAsync(user, toRemove);
+                    if (!remRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(new { message = "Lỗi khi gỡ vai trò cũ.", errors = remRes.Errors });
+                    }
+                }
+
+                if (desiredRoles.Contains(AppRoles.Lecture))
+                {
+                    if (!string.IsNullOrWhiteSpace(dto.BankName)) user.BankName = dto.BankName;
+                    if (!string.IsNullOrWhiteSpace(dto.BankNumber)) user.BankNumber = dto.BankNumber;
+                    if (!string.IsNullOrWhiteSpace(dto.QrCodeImage)) user.QrCodeImage = dto.QrCodeImage;
+
+                    if (_userManager.SupportsUserLockout && await _userManager.IsLockedOutAsync(user))
+                    {
+                        var unlockRes = await _userManager.SetLockoutEndDateAsync(user, null);
+                        if (!unlockRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(new { message = "Lỗi khi mở khóa tài khoản.", errors = unlockRes.Errors });
+                        }
+                        var resetFailRes = await _userManager.ResetAccessFailedCountAsync(user);
+                        if (!resetFailRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(new { message = "Lỗi khi reset số lần đăng nhập sai.", errors = resetFailRes.Errors });
+                        }
+                    }
+                }
+
+                if (dto.ResetPasswordToDefault)
+                {
+                    var resetToken = await _userManager.GeneratePasswordResetTokenAsync(user);
+                    var resetRes = await _userManager.ResetPasswordAsync(user, resetToken, resetPhone + "@123Aa");
+                    if (!resetRes.Succeeded)
+                    {
+                        await transaction.RollbackAsync();
+                        _context.ChangeTracker.Clear();
+                        return BadRequest(new { message = "Lỗi khi đặt lại mật khẩu mặc định.", errors = resetRes.Errors });
+                    }
+                    if (_userManager.SupportsUserLockout)
+                    {
+                        var unlockRes = await _userManager.SetLockoutEndDateAsync(user, null);
+                        if (!unlockRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(new { message = "Lỗi khi mở khóa tài khoản sau reset mật khẩu.", errors = unlockRes.Errors });
+                        }
+                        var resetFailRes = await _userManager.ResetAccessFailedCountAsync(user);
+                        if (!resetFailRes.Succeeded)
+                        {
+                            await transaction.RollbackAsync();
+                            _context.ChangeTracker.Clear();
+                            return BadRequest(new { message = "Lỗi khi reset số lần đăng nhập sai sau reset mật khẩu.", errors = resetFailRes.Errors });
+                        }
+                    }
+                }
+
+                // Cập nhật security stamp để thu hồi token cũ ngay lập tức (Step 2)
+                var stampRes = await _userManager.UpdateSecurityStampAsync(user);
+                if (!stampRes.Succeeded)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(new { message = "Lỗi khi cập nhật security stamp.", errors = stampRes.Errors });
+                }
+
+                var updateRes = await _userManager.UpdateAsync(user);
+                if (!updateRes.Succeeded)
+                {
+                    await transaction.RollbackAsync();
+                    _context.ChangeTracker.Clear();
+                    return BadRequest(new { message = "Lỗi khi lưu thông tin người dùng.", errors = updateRes.Errors });
+                }
+
+                await transaction.CommitAsync();
+
+                var updatedRoles = await _userManager.GetRolesAsync(user);
+                string roleDescription = dto.TargetRole switch
+                {
+                    "Lecture" => "Giáo viên",
+                    "User" => "Phụ huynh",
+                    "Both" => "Kiêm nhiệm (Giáo viên & Phụ huynh)",
+                    _ => dto.TargetRole
+                };
+
+                return Ok(new
+                {
+                    message = $"Đã cập nhật vai trò của người dùng thành: {roleDescription}.",
+                    roles = updatedRoles,
+                    userId = user.Id
+                });
+            }
+            catch (Exception ex) when (DbErrorHelper.IsUniqueViolation(ex))
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return Conflict(new { message = "Thông tin vai trò hoặc người dùng bị xung đột trong hệ thống." });
+            }
+            catch (Exception ex) when (DbErrorHelper.IsTransientConcurrencyError(ex))
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status409Conflict, new { message = "Xung đột đồng thời khi chuyển đổi vai trò, vui lòng thử lại." });
+            }
+            catch (Exception)
+            {
+                await transaction.RollbackAsync();
+                _context.ChangeTracker.Clear();
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Lỗi xử lý chuyển đổi vai trò." });
+            }
         }
     }
 }

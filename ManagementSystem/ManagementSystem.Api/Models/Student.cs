@@ -4,9 +4,11 @@ namespace ManagementSystem.Api.Models
     {
         public int Id { get; set; }
         public string FullName { get; set; } = null!;
+        public string NormalizedFullName { get; set; } = string.Empty;
         public DateTime DateOfBirth { get; set; }
         public string ParentName { get; set; } = null!;
         public string ParentPhoneNumber { get; set; } = null!;
+        public string ParentPhoneCanonical { get; set; } = string.Empty;
         public int TotalRemainingSessions { get; set; }
         public int TotalAttendedSessions { get; set; }
         public int TotalPaidSessions { get; set; }

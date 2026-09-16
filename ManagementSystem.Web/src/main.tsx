@@ -4,17 +4,17 @@ import './index.css'
 import App from './App.tsx'
 import axios from 'axios'
 import { toast } from 'react-hot-toast'
+import { clearSession } from './utils/auth'
 
 axios.defaults.baseURL = import.meta.env.VITE_API_URL || 'http://localhost:5146/api';
 
-// Tự động đăng xuất sau 3 tiếng (khi Token hết hạn và server trả về lỗi 401)
+// Tự động đăng xuất sau 3 tiếng (khi Token hết hạn hoặc bị thu hồi và server trả về lỗi 401)
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('role');
-      toast.error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!');
+      clearSession();
+      toast.error('Phiên đăng nhập đã hết hạn hoặc bị thu hồi. Vui lòng đăng nhập lại!');
       window.location.href = '/login';
     }
     return Promise.reject(error);

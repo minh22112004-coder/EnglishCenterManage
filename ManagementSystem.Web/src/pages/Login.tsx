@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { User, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
+import { setSession } from '../utils/auth';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -23,16 +24,16 @@ const Login = () => {
         password
       });
 
-      const { token, role, roles } = response.data;
-      localStorage.setItem('token', token);
-      localStorage.setItem('role', role);
-      if (roles && Array.isArray(roles)) {
-        localStorage.setItem('roles', JSON.stringify(roles));
-      }
+      const session = setSession({
+        token: response.data.token,
+        role: response.data.role,
+        roles: response.data.roles,
+        user: response.data.user
+      });
 
-      // Chuyển hướng theo quyền
-      if (role === 'Admin') navigate('/admin');
-      else if (role === 'Lecture') navigate('/lecture');
+      // Chuyển hướng theo active portal
+      if (session.activePortal === 'Admin') navigate('/admin');
+      else if (session.activePortal === 'Lecture') navigate('/lecture');
       else navigate('/user');
 
     } catch (err: any) {

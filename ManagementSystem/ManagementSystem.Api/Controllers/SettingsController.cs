@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using ManagementSystem.Api.Models;
+using ManagementSystem.Api.Constants;
 
 namespace ManagementSystem.Api.Controllers
 {
@@ -33,7 +34,7 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpPost("payment")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = AppRoles.Admin)]
         public IActionResult SavePaymentSettings([FromBody] PaymentSettings settings)
         {
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
@@ -42,7 +43,7 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpPost("upload-qr")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = AppRoles.Admin)]
         public async Task<IActionResult> UploadQrCode(IFormFile file)
         {
             if (file == null || file.Length == 0)
@@ -64,7 +65,7 @@ namespace ManagementSystem.Api.Controllers
         }
 
         [HttpGet("backup")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = AppRoles.Admin)]
         public IActionResult BackupDatabase()
         {
             try

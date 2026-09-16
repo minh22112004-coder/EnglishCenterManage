@@ -12,31 +12,25 @@ import Settings from './pages/Settings';
 import AdminDashboard from './pages/AdminDashboard';
 import AttendanceReport from './pages/AttendanceReport';
 import { Toaster } from 'react-hot-toast';
+import { getSession } from './utils/auth';
 
 
 // Hàm phân quyền
 const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode, allowedRoles: string[] }) => {
-  const role = localStorage.getItem('role');
-  const rolesJson = localStorage.getItem('roles');
-  let roles: string[] = [];
-  try {
-    roles = rolesJson ? JSON.parse(rolesJson) : (role ? [role] : []);
-  } catch {
-    roles = role ? [role] : [];
-  }
+  const { token, roles, activePortal } = getSession();
 
-  if (roles.length === 0) {
+  if (!token || roles.length === 0) {
     return <Navigate to="/login" replace />;
   }
 
   // Kiểm tra MẢNG roles đầy đủ thay vì chỉ primaryRole
-  const hasAccess = allowedRoles.some(r => roles.includes(r));
+  const hasAccess = allowedRoles.some(r => roles.includes(r as any));
 
   if (!hasAccess) {
-    // Nếu không có quyền, điều hướng fallback theo vai trò người dùng sở hữu
-    if (roles.includes('Admin')) return <Navigate to="/admin" replace />;
-    if (roles.includes('Lecture')) return <Navigate to="/lecture" replace />;
-    if (roles.includes('User')) return <Navigate to="/user" replace />;
+    // Nếu không có quyền, điều hướng fallback theo activePortal hoặc vai trò sở hữu
+    if (activePortal === 'Admin' || roles.includes('Admin')) return <Navigate to="/admin" replace />;
+    if (activePortal === 'Lecture' || roles.includes('Lecture')) return <Navigate to="/lecture" replace />;
+    if (activePortal === 'User' || roles.includes('User')) return <Navigate to="/user" replace />;
     return <Navigate to="/login" replace />;
   }
 

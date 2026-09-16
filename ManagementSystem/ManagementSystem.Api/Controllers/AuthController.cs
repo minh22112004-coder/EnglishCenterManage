@@ -8,6 +8,8 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using ManagementSystem.Api.Models;
+using ManagementSystem.Api.Constants;
+using ManagementSystem.Api.Common;
 
 namespace ManagementSystem.Api.Controllers
 {
@@ -42,14 +44,15 @@ namespace ManagementSystem.Api.Controllers
         {
             var username = (model.Username ?? "").Trim().Replace(" ", "");
             var normalizedUsername = username.ToLowerInvariant();
+            var normalizedPhone = PhoneHelper.NormalizePhone(username);
 
             // AUTH-04: Tìm kiếm linh hoạt theo Username hoặc Email (bao gồm cả chuẩn hóa chữ thường)
-            // L03: Fallback tìm theo PhoneNumber nếu UserName chưa đồng bộ
+            // L03: Fallback tìm theo CanonicalPhone nếu UserName chưa đồng bộ
             var user = await _userManager.FindByEmailAsync(username) 
                        ?? await _userManager.FindByNameAsync(username)
                        ?? await _userManager.FindByEmailAsync(normalizedUsername)
                        ?? await _userManager.FindByNameAsync(normalizedUsername)
-                       ?? await _userManager.Users.FirstOrDefaultAsync(u => u.PhoneNumber == username);
+                       ?? (!string.IsNullOrEmpty(normalizedPhone) ? await _userManager.Users.FirstOrDefaultAsync(u => u.CanonicalPhone == normalizedPhone) : null);
             
             if (user != null)
             {
@@ -70,18 +73,33 @@ namespace ManagementSystem.Api.Controllers
                     var userRoles = await _userManager.GetRolesAsync(user);
 
                     // AUTH-01: Quy tắc phân cấp ưu tiên quyền hạn: Admin > Lecture > User
-                    string primaryRole = "User";
-                    if (userRoles.Contains("Admin"))
+                    string primaryRole = AppRoles.User;
+                    if (userRoles.Contains(AppRoles.Admin))
                     {
-                        primaryRole = "Admin";
+                        primaryRole = AppRoles.Admin;
                     }
-                    else if (userRoles.Contains("Lecture"))
+                    else if (userRoles.Contains(AppRoles.Lecture))
                     {
-                        primaryRole = "Lecture";
+                        primaryRole = AppRoles.Lecture;
                     }
                     else if (userRoles.Any())
                     {
                         primaryRole = userRoles.First();
+                    }
+
+                    var currentStamp = await _userManager.GetSecurityStampAsync(user);
+                    if (string.IsNullOrEmpty(currentStamp))
+                    {
+                        var stampRes = await _userManager.UpdateSecurityStampAsync(user);
+                        if (!stampRes.Succeeded)
+                        {
+                            return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Không thể khởi tạo mã bảo mật cho tài khoản." });
+                        }
+                        currentStamp = await _userManager.GetSecurityStampAsync(user);
+                        if (string.IsNullOrEmpty(currentStamp))
+                        {
+                            return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Lỗi bảo mật: Không thể xác định security stamp." });
+                        }
                     }
 
                     var authClaims = new List<Claim>
@@ -90,7 +108,8 @@ namespace ManagementSystem.Api.Controllers
                         new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
                         new Claim(ClaimTypes.NameIdentifier, user.Id),
                         new Claim("FullName", user.FullName ?? string.Empty),
-                        new Claim(ClaimTypes.MobilePhone, user.PhoneNumber ?? string.Empty)
+                        new Claim(ClaimTypes.MobilePhone, user.PhoneNumber ?? string.Empty),
+                        new Claim("SecurityStamp", currentStamp)
                     };
 
                     foreach (var userRole in userRoles)
@@ -169,6 +188,7 @@ namespace ManagementSystem.Api.Controllers
             
             if (result.Succeeded)
             {
+                await _userManager.UpdateSecurityStampAsync(user);
                 return Ok(new { message = "Đổi mật khẩu thành công." });
             }
 

@@ -14,8 +14,11 @@ import {
   Bell,
   FileText,
   Trash2,
-  Key
+  Key,
+  Repeat
 } from 'lucide-react';
+import type { PortalType } from '../utils/auth';
+import { getSession, clearSession, setActivePortal } from '../utils/auth';
 
 const Layout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -23,14 +26,43 @@ const Layout = () => {
   const location = useLocation();
   const API_URL = import.meta.env.VITE_API_URL || '';
 
+  const [session, setSessionState] = useState(() => getSession());
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordData, setPasswordData] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' });
 
+  const isDualRole = session.roles.includes('Lecture') && session.roles.includes('User') && !session.roles.includes('Admin');
+  const currentPortal: PortalType = session.activePortal || (session.roles.includes('Admin') ? 'Admin' : (session.roles.includes('Lecture') ? 'Lecture' : 'User'));
+
+  useEffect(() => {
+    const currentSession = getSession();
+    if (isDualRole) {
+      if (location.pathname.startsWith('/lecture') && currentSession.activePortal !== 'Lecture') {
+        setActivePortal('Lecture');
+        setSessionState(getSession());
+        return;
+      }
+      if (location.pathname.startsWith('/user') && currentSession.activePortal !== 'User') {
+        setActivePortal('User');
+        setSessionState(getSession());
+        return;
+      }
+    }
+    setSessionState(currentSession);
+  }, [location.pathname, isDualRole]);
+
+  const handleSwitchPortal = (targetPortal: PortalType) => {
+    setActivePortal(targetPortal);
+    setSessionState(getSession());
+    if (targetPortal === 'Lecture') {
+      navigate('/lecture');
+    } else if (targetPortal === 'User') {
+      navigate('/user');
+    }
+    setSidebarOpen(false);
+  };
+
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('role');
-    localStorage.removeItem('roles');
-    localStorage.removeItem('user');
+    clearSession();
     navigate('/login');
   };
 
@@ -56,8 +88,6 @@ const Layout = () => {
     }
   };
 
-  const role = localStorage.getItem('role') || 'User';
-
   const adminNavItems = [
     { name: 'Dashboard', path: '/admin', icon: LayoutDashboard },
     { name: 'Giáo viên', path: '/admin/lectures', icon: Users },
@@ -82,10 +112,13 @@ const Layout = () => {
   const [showBellDropdown, setShowBellDropdown] = useState(false);
 
   useEffect(() => {
-    if (role === 'User') {
+    if (currentPortal === 'User') {
       fetchNotifications();
+    } else {
+      setNotifications([]);
+      setShowNotificationPopup(false);
     }
-  }, [role]);
+  }, [currentPortal]);
 
   const fetchNotifications = async () => {
     try {
@@ -112,7 +145,7 @@ const Layout = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchNotifications();
-    } catch (err) { }
+    } catch { }
   };
 
   const hidePopup = async (id: number) => {
@@ -123,12 +156,20 @@ const Layout = () => {
       });
       setShowNotificationPopup(false);
       fetchNotifications();
-    } catch (err) { }
+    } catch { }
   };
 
   let navItems = adminNavItems;
-  if (role === 'Lecture') navItems = lectureNavItems;
-  else if (role === 'User') navItems = userNavItems;
+  if (currentPortal === 'Lecture') navItems = lectureNavItems;
+  else if (currentPortal === 'User') navItems = userNavItems;
+
+  const portalBrandTitle = currentPortal === 'Admin'
+    ? 'LMS Admin'
+    : (currentPortal === 'Lecture' ? 'Giáo viên' : 'Phụ huynh');
+
+  const avatarInitial = session.user?.fullName
+    ? session.user.fullName.trim().charAt(0).toUpperCase()
+    : (currentPortal === 'Admin' ? 'A' : (currentPortal === 'Lecture' ? 'G' : 'P'));
 
   return (
     <div className="min-h-screen bg-slate-50 flex overflow-hidden font-sans">
@@ -145,11 +186,43 @@ const Layout = () => {
       <div className={`fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-slate-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
 
         <div className="flex items-center justify-between h-16 px-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md z-10">
-          <span className="text-xl font-bold tracking-wider">{role === 'Admin' ? 'LMS Admin' : (role === 'Lecture' ? 'Giáo viên' : 'Học viên')}</span>
+          <span className="text-xl font-bold tracking-wider">{portalBrandTitle}</span>
           <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-indigo-100 hover:text-white">
             <X size={24} />
           </button>
         </div>
+
+        {/* Dual-role portal switcher in sidebar */}
+        {isDualRole && (
+          <div className="p-3 bg-indigo-50/50 border-b border-indigo-100/50">
+            <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wider mb-2 flex items-center">
+              <Repeat size={14} className="mr-1" />
+              Chuyển cổng làm việc
+            </div>
+            <div className="grid grid-cols-2 gap-1 bg-white p-1 rounded-xl border border-indigo-100 shadow-sm">
+              <button
+                onClick={() => handleSwitchPortal('Lecture')}
+                className={`py-1.5 px-2 text-xs font-medium rounded-lg transition-all ${
+                  currentPortal === 'Lecture'
+                    ? 'bg-indigo-600 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                Giáo viên
+              </button>
+              <button
+                onClick={() => handleSwitchPortal('User')}
+                className={`py-1.5 px-2 text-xs font-medium rounded-lg transition-all ${
+                  currentPortal === 'User'
+                    ? 'bg-indigo-600 text-white shadow-sm font-semibold'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                Phụ huynh
+              </button>
+            </div>
+          </div>
+        )}
 
         <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
           {navItems.map((item) => {
@@ -209,9 +282,36 @@ const Layout = () => {
             </h2>
           </div>
 
-          <div className="flex-1 flex justify-end items-center space-x-6">
+          <div className="flex-1 flex justify-end items-center space-x-4 lg:space-x-6">
 
-            {role === 'User' && (
+            {/* Quick Portal Switcher in Header for Dual-Role */}
+            {isDualRole && (
+              <div className="hidden sm:flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <button
+                  onClick={() => handleSwitchPortal('Lecture')}
+                  className={`py-1 px-3 text-xs font-semibold rounded-lg transition-all ${
+                    currentPortal === 'Lecture'
+                      ? 'bg-white text-indigo-700 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Giáo viên
+                </button>
+                <button
+                  onClick={() => handleSwitchPortal('User')}
+                  className={`py-1 px-3 text-xs font-semibold rounded-lg transition-all ${
+                    currentPortal === 'User'
+                      ? 'bg-white text-indigo-700 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Phụ huynh
+                </button>
+              </div>
+            )}
+
+            {/* Notifications (available when in User portal) */}
+            {currentPortal === 'User' && (
               <div className="relative">
                 <button
                   onClick={() => setShowBellDropdown(!showBellDropdown)}
@@ -249,11 +349,15 @@ const Layout = () => {
 
             <div className="flex items-center space-x-3 cursor-pointer p-1 pr-3 rounded-full hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all">
               <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 text-white flex items-center justify-center font-bold shadow-inner">
-                A
+                {avatarInitial}
               </div>
               <div className="hidden sm:flex flex-col items-start">
-                <span className="text-sm font-bold text-slate-700 leading-tight">Tài khoản {role}</span>
-                <span className="text-xs text-slate-400 font-medium">Truy cập</span>
+                <span className="text-sm font-bold text-slate-700 leading-tight">
+                  {session.user?.fullName || `Tài khoản ${currentPortal}`}
+                </span>
+                <span className="text-xs text-slate-400 font-medium">
+                  {isDualRole ? `Cổng ${currentPortal === 'Lecture' ? 'Giáo viên' : 'Phụ huynh'}` : `Quyền ${currentPortal}`}
+                </span>
               </div>
             </div>
           </div>
@@ -266,8 +370,8 @@ const Layout = () => {
           </div>
         </main>
 
-        {/* Notification Popup (Only shown once per unread message) */}
-        {showNotificationPopup && role === 'User' && (
+        {/* Notification Popup (Only shown once per unread message in User portal) */}
+        {showNotificationPopup && currentPortal === 'User' && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in-up">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm flex flex-col overflow-hidden">
               <div className="p-6 bg-red-50 flex items-center space-x-3 border-b border-red-100">
