@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 interface StudentAttendanceModalProps {
@@ -11,13 +11,19 @@ const StudentAttendanceModal: React.FC<StudentAttendanceModalProps> = ({ isOpen,
   const [attendances, setAttendances] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterMonth, setFilterMonth] = useState<string>(''); // format YYYY-MM
+  const fetchedStudentIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (isOpen && student) {
-      fetchAttendances();
+      if (fetchedStudentIdRef.current !== student.id) {
+        fetchedStudentIdRef.current = student.id;
+        fetchAttendances();
+      }
       // Default filter to current month
       const now = new Date();
       setFilterMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+    } else {
+      fetchedStudentIdRef.current = null;
     }
   }, [isOpen, student]);
 

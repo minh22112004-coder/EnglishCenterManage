@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Calendar as CalendarIcon, CheckCircle, Users, Clock, AlertCircle, Save, CheckSquare, Square, FileText, BarChart2 } from 'lucide-react';
 import axios from 'axios';
 
@@ -16,6 +16,7 @@ const LectureDashboard = () => {
   const [attendanceState, setAttendanceState] = useState<Record<number, boolean>>({});
   const [lectureNotice, setLectureNotice] = useState('');
   const [tasksState, setTasksState] = useState<any[]>([]);
+  const hasFetchedRef = useRef(false);
 
   const fetchData = async () => {
     try {
@@ -37,6 +38,8 @@ const LectureDashboard = () => {
   };
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchData();
   }, []);
 

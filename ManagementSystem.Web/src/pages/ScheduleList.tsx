@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Calendar, Plus, Edit2, Trash2, Clock, CheckSquare } from 'lucide-react';
 import axios from 'axios';
 import Pagination from '../components/Pagination';
@@ -22,6 +22,7 @@ const ScheduleList = () => {
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
+  const hasFetchedRef = useRef(false);
 
   const paginatedSchedules = React.useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -52,6 +53,8 @@ const ScheduleList = () => {
   };
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchData();
   }, []);
 

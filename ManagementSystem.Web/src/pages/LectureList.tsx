@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, 
   Plus, 
@@ -55,6 +55,7 @@ const LectureList = () => {
   // Pagination for Parents
   const [parentPage, setParentPage] = useState(1);
   const [parentItemsPerPage, setParentItemsPerPage] = useState(25);
+  const hasFetchedLecturesRef = useRef(false);
 
   const paginatedLectures = React.useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -111,6 +112,8 @@ const LectureList = () => {
   };
 
   useEffect(() => {
+    if (hasFetchedLecturesRef.current) return;
+    hasFetchedLecturesRef.current = true;
     fetchLectures();
   }, []);
 

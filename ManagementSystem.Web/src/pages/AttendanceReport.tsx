@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Search, Download, Filter, FileText } from 'lucide-react';
 import axios from 'axios';
 import * as xlsx from 'xlsx';
@@ -17,6 +17,7 @@ const AttendanceReport = () => {
   
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
+  const hasFetchedRef = useRef(false);
 
   const paginatedReports = React.useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -44,6 +45,8 @@ const AttendanceReport = () => {
   };
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchReports();
   }, []);
 

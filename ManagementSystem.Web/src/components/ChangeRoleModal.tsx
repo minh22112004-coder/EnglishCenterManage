@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, ArrowLeftRight, ShieldAlert, GraduationCap, Users, Sparkles, AlertTriangle, KeyRound, CheckCircle2, Lock, Unlock } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
@@ -40,15 +40,20 @@ const ChangeRoleModal: React.FC<ChangeRoleModalProps> = ({ isOpen, onClose, user
   const [bankNumber, setBankNumber] = useState('');
   const [qrCodeImage, setQrCodeImage] = useState('');
   const [resetPassword, setResetPassword] = useState(false);
+  const fetchedUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isOpen && user?.id) {
-      fetchSummary();
+      if (fetchedUserIdRef.current !== user.id) {
+        fetchedUserIdRef.current = user.id;
+        fetchSummary();
+      }
       setBankName(user.bankName || '');
       setBankNumber(user.bankNumber || '');
       setQrCodeImage(user.qrCodeImage || '');
       setResetPassword(false);
     } else {
+      fetchedUserIdRef.current = null;
       setSummary(null);
     }
   }, [isOpen, user]);

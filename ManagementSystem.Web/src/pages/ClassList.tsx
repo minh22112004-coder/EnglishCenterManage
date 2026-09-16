@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Search, Plus, MoreVertical, Edit2, Trash2, Users, History } from 'lucide-react';
 import axios from 'axios';
 
@@ -17,6 +17,7 @@ const ClassList = () => {
     classCode: '', className: '', timeSlots: '', studentIds: [] 
   });
   const [editId, setEditId] = useState<number | null>(null);
+  const hasFetchedRef = useRef(false);
 
   const resetForm = () => {
     setFormData({ classCode: '', className: '', timeSlots: '', studentIds: [] });
@@ -41,6 +42,8 @@ const ClassList = () => {
   };
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchData();
   }, []);
 

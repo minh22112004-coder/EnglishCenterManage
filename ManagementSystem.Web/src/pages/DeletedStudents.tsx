@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Users, Search, RefreshCw, Trash2, ArrowLeft, CheckSquare } from 'lucide-react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
@@ -25,6 +25,7 @@ const DeletedStudents = () => {
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
+  const hasFetchedRef = useRef(false);
 
   const filteredStudents = students.filter((s: Student) => 
     s.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -37,6 +38,8 @@ const DeletedStudents = () => {
   }, [filteredStudents, currentPage, itemsPerPage]);
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchClasses();
     fetchDeletedStudents();
   }, []);

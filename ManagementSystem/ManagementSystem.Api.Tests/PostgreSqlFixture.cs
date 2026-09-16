@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Identity;
 using Testcontainers.PostgreSql;
 using ManagementSystem.Api.Data;
+using ManagementSystem.Api.Models;
 using ManagementSystem.Api.Services;
 using Xunit;
 
@@ -44,6 +46,18 @@ namespace ManagementSystem.Api.Tests
                 options.UseNpgsql(ConnectionString));
             services.AddDbContext<AppDbContext>(options =>
                 options.UseNpgsql(ConnectionString), ServiceLifetime.Scoped, ServiceLifetime.Singleton);
+            services.AddDataProtection();
+            services.AddIdentityCore<AppUser>(options =>
+                {
+                    options.Password.RequireDigit = false;
+                    options.Password.RequiredLength = 6;
+                    options.Password.RequireNonAlphanumeric = false;
+                    options.Password.RequireUppercase = false;
+                    options.Password.RequireLowercase = false;
+                })
+                .AddRoles<IdentityRole>()
+                .AddEntityFrameworkStores<AppDbContext>()
+                .AddDefaultTokenProviders();
             services.AddScoped<IAttendanceService, AttendanceService>();
             services.AddHttpContextAccessor();
 
@@ -55,6 +69,22 @@ namespace ManagementSystem.Api.Tests
             // integration test into a misleading skip.
             await using var context = await ContextFactory.CreateDbContextAsync();
             await context.Database.MigrateAsync();
+
+            using (var seedScope = ServiceProvider.CreateScope())
+            {
+                var roleManager = seedScope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+                foreach (var roleName in new[] { "Admin", "Lecture", "User" })
+                {
+                    if (!await roleManager.RoleExistsAsync(roleName))
+                    {
+                        var roleResult = await roleManager.CreateAsync(new IdentityRole(roleName));
+                        if (!roleResult.Succeeded)
+                        {
+                            throw new InvalidOperationException($"Could not seed role {roleName}: {string.Join(", ", roleResult.Errors.Select(e => e.Description))}");
+                        }
+                    }
+                }
+            }
             IsDockerAvailable = true;
         }
 

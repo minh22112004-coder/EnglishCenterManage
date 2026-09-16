@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Search, Plus, Filter, MoreVertical, Edit2, Trash2, Download, Upload, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import axios from 'axios';
 import * as xlsx from 'xlsx';
@@ -60,6 +60,7 @@ const StudentList = () => {
   const [itemsPerPage, setItemsPerPage] = useState(25);
   
   const [isAdmin, setIsAdmin] = useState(false);
+  const hasFetchedRef = useRef(false);
   
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -109,6 +110,8 @@ const StudentList = () => {
   };
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchStudents();
     fetchClasses();
   }, []);

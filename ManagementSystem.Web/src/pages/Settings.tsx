@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Save, Building, CreditCard, User, Database, Download } from 'lucide-react';
 import axios from 'axios';
 
@@ -10,8 +10,11 @@ const Settings = () => {
     customQrUrl: ''
   });
   const [loading, setLoading] = useState(true);
+  const hasFetchedRef = useRef(false);
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchSettings();
   }, []);
 

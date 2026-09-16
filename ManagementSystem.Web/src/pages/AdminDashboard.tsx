@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Users, BookOpen, Calendar as CalendarIcon, Download } from 'lucide-react';
 
@@ -10,8 +10,12 @@ const AdminDashboard = () => {
   });
   const [warningStudents, setWarningStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasFetchedRef = useRef(false);
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+
     const fetchStats = async () => {
       try {
         const token = localStorage.getItem('token');
