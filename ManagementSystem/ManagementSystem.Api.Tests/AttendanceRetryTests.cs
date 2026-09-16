@@ -11,6 +11,7 @@ namespace ManagementSystem.Api.Tests
         private class TestDbContextFactory : IDbContextFactory<AppDbContext>
         {
             public int CreateCount { get; private set; }
+            public List<AppDbContext> CreatedContexts { get; } = new();
             private readonly DbContextOptions<AppDbContext> _options;
 
             public TestDbContextFactory()
@@ -23,13 +24,17 @@ namespace ManagementSystem.Api.Tests
             public AppDbContext CreateDbContext()
             {
                 CreateCount++;
-                return new AppDbContext(_options, null!);
+                var context = new AppDbContext(_options, null!);
+                CreatedContexts.Add(context);
+                return context;
             }
 
             public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
             {
                 CreateCount++;
-                return Task.FromResult(new AppDbContext(_options, null!));
+                var context = new AppDbContext(_options, null!);
+                CreatedContexts.Add(context);
+                return Task.FromResult(context);
             }
         }
 
@@ -46,19 +51,23 @@ namespace ManagementSystem.Api.Tests
                 _scriptedAttempts = new Queue<(AttendanceBatchStatus, string?, bool)>(scriptedAttempts);
             }
 
-            public override Task<(AttendanceBatchStatus Status, string? Message, bool IsTransient)> ExecuteAttemptAsync(
+            public override async Task<(AttendanceBatchStatus Status, string? Message, bool IsTransient)> ExecuteAttemptAsync(
                 List<(int StudentId, DateOnly AttendanceDay, DateTime DateUtc, bool IsPresent, int? DtoClassId)> clientItems,
                 List<int> affectedStudentIds,
                 bool isAdmin,
                 string? userId,
                 CancellationToken cancellationToken = default)
             {
+                // Exercise the same production context-creation seam used by the
+                // real attempt. This makes the retry test fail if a retry reuses
+                // a context/change tracker after a rollback.
+                await using var context = await CreateDbContextAsync(cancellationToken);
                 AttemptIndices.Add(AttemptIndices.Count + 1);
                 if (_scriptedAttempts.Count > 0)
                 {
-                    return Task.FromResult(_scriptedAttempts.Dequeue());
+                    return _scriptedAttempts.Dequeue();
                 }
-                return Task.FromResult((AttendanceBatchStatus.Success, (string?)"Success", false));
+                return (AttendanceBatchStatus.Success, (string?)"Success", false);
             }
         }
 
@@ -90,6 +99,8 @@ namespace ManagementSystem.Api.Tests
             Assert.Equal(AttendanceBatchStatus.Success, result.Status);
             Assert.Equal(2, result.Attempts);
             Assert.Equal(2, service.AttemptIndices.Count);
+            Assert.Equal(2, factory.CreateCount);
+            Assert.Equal(2, factory.CreatedContexts.Distinct().Count());
         }
 
         [Fact]
@@ -121,6 +132,8 @@ namespace ManagementSystem.Api.Tests
             Assert.Equal(AttendanceBatchStatus.ConflictConcurrency, result.Status);
             Assert.Equal(4, result.Attempts); // Initial + 3 retries = 4 attempts total
             Assert.Equal(4, service.AttemptIndices.Count);
+            Assert.Equal(4, factory.CreateCount);
+            Assert.Equal(4, factory.CreatedContexts.Distinct().Count());
         }
 
         [Fact]
@@ -149,6 +162,7 @@ namespace ManagementSystem.Api.Tests
             Assert.Equal(AttendanceBatchStatus.ConflictDuplicate, result.Status);
             Assert.Equal(1, result.Attempts); // Exactly 1 attempt
             Assert.Single(service.AttemptIndices);
+            Assert.Equal(1, factory.CreateCount);
         }
     }
 }

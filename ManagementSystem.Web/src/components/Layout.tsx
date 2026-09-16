@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
@@ -110,11 +110,15 @@ const Layout = () => {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotificationPopup, setShowNotificationPopup] = useState(false);
   const [showBellDropdown, setShowBellDropdown] = useState(false);
+  const notificationsFetchedRef = useRef(false);
 
   useEffect(() => {
     if (currentPortal === 'User') {
+      if (notificationsFetchedRef.current) return;
+      notificationsFetchedRef.current = true;
       fetchNotifications();
     } else {
+      notificationsFetchedRef.current = false;
       setNotifications([]);
       setShowNotificationPopup(false);
     }

@@ -17,7 +17,10 @@ const Settings = () => {
 
   const fetchSettings = async () => {
     try {
-      const res = await axios.get(`/settings/payment`);
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`/settings/payment`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setFormData(res.data);
     } catch (error) {
       console.error('Lỗi tải cài đặt:', error);

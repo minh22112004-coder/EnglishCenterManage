@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using ManagementSystem.Api.Common;
 using ManagementSystem.Api.Data;
 using ManagementSystem.Api.Models;
@@ -272,6 +273,311 @@ namespace ManagementSystem.Api.Tests
             var day1Updated = await verifyContext2.Attendances.FirstOrDefaultAsync(a => a.StudentId == student.Id && a.AttendanceDay == DateOnly.FromDateTime(day1));
             Assert.NotNull(day1Updated);
             Assert.Equal(classA.Id, day1Updated.ClassId);
+        }
+
+        [SkippableFact]
+        public async Task Test5_DuplicateStudentDayInBatch_IsRejectedBeforeAnyWrite()
+        {
+            _fixture.EnsureDockerOrSkip();
+
+            await using var setupContext = await _fixture.CreateContextAsync();
+            var testClass = new Class
+            {
+                ClassCode = $"DUP_{Guid.NewGuid():N}"[..20],
+                ClassName = $"Duplicate batch class {Guid.NewGuid():N}"
+            };
+            var student = new Student
+            {
+                FullName = $"Duplicate batch student {Guid.NewGuid():N}",
+                ParentName = "Parent",
+                ParentPhoneNumber = "0912345678",
+                Class = testClass,
+                TotalPaidSessions = 10,
+                TotalRemainingSessions = 10
+            };
+            setupContext.Students.Add(student);
+            await setupContext.SaveChangesAsync();
+
+            var day = new DateOnly(2026, 11, 5);
+            var result = await _fixture.CreateAttendanceService().MarkAttendanceBatchAsync(new List<AttendanceDto>
+            {
+                new() { StudentId = student.Id, ClassId = testClass.Id, Date = day.ToDateTime(new TimeOnly(8, 0), DateTimeKind.Utc), IsPresent = true },
+                // Different timestamps still identify the same attendance day.
+                new() { StudentId = student.Id, ClassId = testClass.Id, Date = day.ToDateTime(new TimeOnly(20, 0), DateTimeKind.Utc), IsPresent = false }
+            }, isAdmin: true, userId: null);
+
+            Assert.Equal(AttendanceBatchStatus.BadRequest, result.Status);
+
+            await using var verifyContext = await _fixture.CreateContextAsync();
+            Assert.Equal(0, await verifyContext.Attendances.CountAsync(a => a.StudentId == student.Id));
+            var unchanged = await verifyContext.Students.SingleAsync(s => s.Id == student.Id);
+            Assert.Equal(0, unchanged.TotalAttendedSessions);
+            Assert.Equal(10, unchanged.TotalRemainingSessions);
+        }
+
+        [SkippableFact]
+        public async Task Test6_RepeatedPresentForSameDay_IsIdempotentAndIncrementsOnce()
+        {
+            _fixture.EnsureDockerOrSkip();
+
+            await using var setupContext = await _fixture.CreateContextAsync();
+            var testClass = new Class
+            {
+                ClassCode = $"IDEM_{Guid.NewGuid():N}"[..20],
+                ClassName = $"Idempotent class {Guid.NewGuid():N}"
+            };
+            var student = new Student
+            {
+                FullName = $"Idempotent student {Guid.NewGuid():N}",
+                ParentName = "Parent",
+                ParentPhoneNumber = "0912345678",
+                Class = testClass,
+                TotalPaidSessions = 10,
+                TotalRemainingSessions = 10
+            };
+            setupContext.Students.Add(student);
+            await setupContext.SaveChangesAsync();
+
+            var dto = new AttendanceDto
+            {
+                StudentId = student.Id,
+                ClassId = testClass.Id,
+                Date = new DateTime(2026, 11, 6, 9, 30, 0, DateTimeKind.Utc),
+                IsPresent = true
+            };
+            var service = _fixture.CreateAttendanceService();
+            Assert.Equal(AttendanceBatchStatus.Success, (await service.MarkAttendanceBatchAsync(new() { dto }, true, null)).Status);
+            Assert.Equal(AttendanceBatchStatus.Success, (await service.MarkAttendanceBatchAsync(new() { dto }, true, null)).Status);
+
+            await using var verifyContext = await _fixture.CreateContextAsync();
+            Assert.Equal(1, await verifyContext.Attendances.CountAsync(a => a.StudentId == student.Id));
+            var persisted = await verifyContext.Students.SingleAsync(s => s.Id == student.Id);
+            Assert.Equal(1, persisted.TotalAttendedSessions);
+            Assert.Equal(9, persisted.TotalRemainingSessions);
+        }
+
+        [SkippableFact]
+        public async Task Test7_PresentAbsentPresent_UpdatesDeltaExactlyOnce()
+        {
+            _fixture.EnsureDockerOrSkip();
+
+            await using var setupContext = await _fixture.CreateContextAsync();
+            var testClass = new Class
+            {
+                ClassCode = $"DELTA_{Guid.NewGuid():N}"[..20],
+                ClassName = $"Delta class {Guid.NewGuid():N}"
+            };
+            var student = new Student
+            {
+                FullName = $"Delta student {Guid.NewGuid():N}",
+                ParentName = "Parent",
+                ParentPhoneNumber = "0912345678",
+                Class = testClass,
+                TotalPaidSessions = 10,
+                TotalRemainingSessions = 10
+            };
+            setupContext.Students.Add(student);
+            await setupContext.SaveChangesAsync();
+
+            var service = _fixture.CreateAttendanceService();
+            var day = new DateTime(2026, 11, 7, 11, 0, 0, DateTimeKind.Utc);
+            async Task<AttendanceBatchResult> Mark(bool present) => await service.MarkAttendanceBatchAsync(new List<AttendanceDto>
+            {
+                new() { StudentId = student.Id, ClassId = testClass.Id, Date = day, IsPresent = present }
+            }, true, null);
+
+            Assert.Equal(AttendanceBatchStatus.Success, (await Mark(true)).Status);
+            Assert.Equal(AttendanceBatchStatus.Success, (await Mark(false)).Status);
+            Assert.Equal(AttendanceBatchStatus.Success, (await Mark(true)).Status);
+
+            await using var verifyContext = await _fixture.CreateContextAsync();
+            var attendance = await verifyContext.Attendances.SingleAsync(a => a.StudentId == student.Id);
+            Assert.True(attendance.IsPresent);
+            var persisted = await verifyContext.Students.SingleAsync(s => s.Id == student.Id);
+            Assert.Equal(1, persisted.TotalAttendedSessions);
+            Assert.Equal(9, persisted.TotalRemainingSessions);
+        }
+
+        [SkippableFact]
+        public async Task Test8_InvalidStudentInBatch_RollsBackValidItems()
+        {
+            _fixture.EnsureDockerOrSkip();
+
+            await using var setupContext = await _fixture.CreateContextAsync();
+            var testClass = new Class
+            {
+                ClassCode = $"ROLL_{Guid.NewGuid():N}"[..20],
+                ClassName = $"Rollback class {Guid.NewGuid():N}"
+            };
+            var student = new Student
+            {
+                FullName = $"Rollback student {Guid.NewGuid():N}",
+                ParentName = "Parent",
+                ParentPhoneNumber = "0912345678",
+                Class = testClass,
+                TotalPaidSessions = 10,
+                TotalRemainingSessions = 10
+            };
+            setupContext.Students.Add(student);
+            await setupContext.SaveChangesAsync();
+
+            var result = await _fixture.CreateAttendanceService().MarkAttendanceBatchAsync(new List<AttendanceDto>
+            {
+                new() { StudentId = student.Id, ClassId = testClass.Id, Date = new DateTime(2026, 11, 8, 0, 0, 0, DateTimeKind.Utc), IsPresent = true },
+                new() { StudentId = int.MaxValue, ClassId = testClass.Id, Date = new DateTime(2026, 11, 8, 0, 0, 0, DateTimeKind.Utc), IsPresent = true }
+            }, true, null);
+
+            Assert.Equal(AttendanceBatchStatus.Forbidden, result.Status);
+            await using var verifyContext = await _fixture.CreateContextAsync();
+            Assert.Equal(0, await verifyContext.Attendances.CountAsync(a => a.StudentId == student.Id));
+            var unchanged = await verifyContext.Students.SingleAsync(s => s.Id == student.Id);
+            Assert.Equal(0, unchanged.TotalAttendedSessions);
+            Assert.Equal(10, unchanged.TotalRemainingSessions);
+        }
+
+        [SkippableFact]
+        public async Task Test9_ConcurrentSameStudentDay_CreatesOneRowAndOneIncrement()
+        {
+            _fixture.EnsureDockerOrSkip();
+
+            await using var setupContext = await _fixture.CreateContextAsync();
+            var testClass = new Class
+            {
+                ClassCode = $"RACE_{Guid.NewGuid():N}"[..20],
+                ClassName = $"Race class {Guid.NewGuid():N}"
+            };
+            var student = new Student
+            {
+                FullName = $"Race student {Guid.NewGuid():N}",
+                ParentName = "Parent",
+                ParentPhoneNumber = "0912345678",
+                Class = testClass,
+                TotalPaidSessions = 10,
+                TotalRemainingSessions = 10
+            };
+            setupContext.Students.Add(student);
+            await setupContext.SaveChangesAsync();
+
+            var service = _fixture.CreateAttendanceService();
+            var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var dto = new AttendanceDto
+            {
+                StudentId = student.Id,
+                ClassId = testClass.Id,
+                Date = new DateTime(2026, 11, 9, 14, 0, 0, DateTimeKind.Utc),
+                IsPresent = true
+            };
+            var first = Task.Run(async () => { await start.Task; return await service.MarkAttendanceBatchAsync(new() { dto }, true, null); });
+            var second = Task.Run(async () => { await start.Task; return await service.MarkAttendanceBatchAsync(new() { dto }, true, null); });
+            start.SetResult(true);
+            var results = await Task.WhenAll(first, second);
+
+            Assert.All(results, result => Assert.Equal(AttendanceBatchStatus.Success, result.Status));
+            await using var verifyContext = await _fixture.CreateContextAsync();
+            Assert.Equal(1, await verifyContext.Attendances.CountAsync(a => a.StudentId == student.Id));
+            var persisted = await verifyContext.Students.SingleAsync(s => s.Id == student.Id);
+            Assert.Equal(1, persisted.TotalAttendedSessions);
+        }
+
+        [SkippableFact]
+        public async Task Test10_LectureMustHaveClassScheduleForAttendance()
+        {
+            _fixture.EnsureDockerOrSkip();
+
+            await using var setupContext = await _fixture.CreateContextAsync();
+            var testClass = new Class
+            {
+                ClassCode = $"AUTH_{Guid.NewGuid():N}"[..20],
+                ClassName = $"Authorization class {Guid.NewGuid():N}"
+            };
+            var student = new Student
+            {
+                FullName = $"Authorization student {Guid.NewGuid():N}",
+                ParentName = "Parent",
+                ParentPhoneNumber = "0912345678",
+                Class = testClass,
+                TotalPaidSessions = 10,
+                TotalRemainingSessions = 10
+            };
+            var lecture = new AppUser
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                UserName = $"lecture-{Guid.NewGuid():N}",
+                NormalizedUserName = "LECTURE-" + Guid.NewGuid().ToString("N")
+            };
+            var day = new DateTime(2026, 11, 10, 0, 0, 0, DateTimeKind.Utc);
+            var schedule = new WorkSchedule
+            {
+                User = lecture,
+                Date = day,
+                Classes = new List<Class> { testClass }
+            };
+            setupContext.Students.Add(student);
+            setupContext.WorkSchedules.Add(schedule);
+            await setupContext.SaveChangesAsync();
+
+            var service = _fixture.CreateAttendanceService();
+            var dto = new AttendanceDto { StudentId = student.Id, ClassId = testClass.Id, Date = day, IsPresent = true };
+            var assigned = await service.MarkAttendanceBatchAsync(new() { dto }, isAdmin: false, userId: lecture.Id);
+            Assert.Equal(AttendanceBatchStatus.Success, assigned.Status);
+
+            var unauthorized = await service.MarkAttendanceBatchAsync(new()
+            {
+                new() { StudentId = student.Id, ClassId = testClass.Id, Date = day.AddDays(1), IsPresent = true }
+            }, isAdmin: false, userId: Guid.NewGuid().ToString("N"));
+            Assert.Equal(AttendanceBatchStatus.Forbidden, unauthorized.Status);
+
+            await using var verifyContext = await _fixture.CreateContextAsync();
+            Assert.Equal(1, await verifyContext.Attendances.CountAsync(a => a.StudentId == student.Id));
+            var persisted = await verifyContext.Students.SingleAsync(s => s.Id == student.Id);
+            Assert.Equal(1, persisted.TotalAttendedSessions);
+        }
+
+        [SkippableFact]
+        public async Task Test11_WrappedUniqueViolation_IsMappedToConflictDuplicate()
+        {
+            _fixture.EnsureDockerOrSkip();
+
+            await using var setupContext = await _fixture.CreateContextAsync();
+            var testClass = new Class
+            {
+                ClassCode = $"ERR_{Guid.NewGuid():N}"[..20],
+                ClassName = $"Error mapping class {Guid.NewGuid():N}"
+            };
+            var student = new Student
+            {
+                FullName = $"Error mapping student {Guid.NewGuid():N}",
+                ParentName = "Parent",
+                ParentPhoneNumber = "0912345678",
+                Class = testClass,
+                TotalPaidSessions = 10,
+                TotalRemainingSessions = 10
+            };
+            setupContext.Students.Add(student);
+            await setupContext.SaveChangesAsync();
+
+            var service = new DuplicateSaveAttendanceService(_fixture.ContextFactory!);
+            var result = await service.MarkAttendanceBatchAsync(new()
+            {
+                new() { StudentId = student.Id, ClassId = testClass.Id, Date = new DateTime(2026, 11, 11, 0, 0, 0, DateTimeKind.Utc), IsPresent = true }
+            }, true, null);
+
+            Assert.Equal(AttendanceBatchStatus.ConflictDuplicate, result.Status);
+            Assert.Equal(1, result.Attempts);
+            await using var verifyContext = await _fixture.CreateContextAsync();
+            Assert.Equal(0, await verifyContext.Attendances.CountAsync(a => a.StudentId == student.Id));
+            var unchanged = await verifyContext.Students.SingleAsync(s => s.Id == student.Id);
+            Assert.Equal(0, unchanged.TotalAttendedSessions);
+        }
+
+        private sealed class DuplicateSaveAttendanceService : AttendanceService
+        {
+            public DuplicateSaveAttendanceService(IDbContextFactory<AppDbContext> factory) : base(factory) { }
+
+            protected override Task<int> SaveChangesAsync(AppDbContext context, CancellationToken cancellationToken)
+                => throw new DbUpdateException(
+                    "Synthetic unique violation",
+                    new PostgresException("duplicate key", "ERROR", "ERROR", DbErrorHelper.UniqueViolation));
         }
     }
 }

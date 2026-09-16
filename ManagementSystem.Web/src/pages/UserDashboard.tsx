@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BookOpen, Calendar, Clock, CreditCard, QrCode, TrendingUp, AlertTriangle, Users, Copy, CheckCircle2 } from 'lucide-react';
 import axios from 'axios';
 
@@ -10,6 +10,7 @@ const UserDashboard = () => {
   const [showQR, setShowQR] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const hasFetchedRef = useRef(false);
 
   const [paymentSettings, setPaymentSettings] = useState({
     bankId: 'vietcombank',
@@ -19,6 +20,10 @@ const UserDashboard = () => {
   });
 
   useEffect(() => {
+    // React StrictMode re-runs effects once in development. Keep this read-only
+    // bootstrap idempotent so it does not issue duplicate API requests.
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
     fetchData();
   }, []);
 
@@ -27,7 +32,10 @@ const UserDashboard = () => {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
 
-      const childrenRes = await axios.get(`/student/mychildren`, { headers });
+      const childrenRes = await axios.get(`/student/mychildren`, {
+        headers,
+        authFailureAction: 'logout'
+      });
       setChildren(childrenRes.data);
       if (childrenRes.data.length > 0) {
         setSelectedChild(childrenRes.data[0]);
@@ -36,7 +44,7 @@ const UserDashboard = () => {
       const schedulesRes = await axios.get(`/workschedule/mychildren-upcoming`, { headers });
       setUpcomingSchedules(schedulesRes.data);
 
-      const settingsRes = await axios.get(`/settings/payment`);
+      const settingsRes = await axios.get(`/settings/payment`, { headers });
       if (settingsRes.data) {
         setPaymentSettings(settingsRes.data);
       }

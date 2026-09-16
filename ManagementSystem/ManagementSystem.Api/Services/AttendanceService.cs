@@ -14,6 +14,14 @@ namespace ManagementSystem.Api.Services
             _contextFactory = contextFactory;
         }
 
+        // Keep the attempt boundary testable: every retry must obtain and dispose a
+        // completely new context, and persistence can be fault-injected in tests.
+        protected virtual Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken)
+            => _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        protected virtual Task<int> SaveChangesAsync(AppDbContext context, CancellationToken cancellationToken)
+            => context.SaveChangesAsync(cancellationToken);
+
         public async Task<AttendanceBatchResult> MarkAttendanceBatchAsync(
             List<AttendanceDto> dtos,
             bool isAdmin,
@@ -82,7 +90,7 @@ namespace ManagementSystem.Api.Services
             string? userId,
             CancellationToken cancellationToken = default)
         {
-            await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+            await using var context = await CreateDbContextAsync(cancellationToken);
             await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken);
             try
             {
@@ -271,7 +279,7 @@ namespace ManagementSystem.Api.Services
                     }
                 }
 
-                await context.SaveChangesAsync(cancellationToken);
+                await SaveChangesAsync(context, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return (AttendanceBatchStatus.Success, "Lưu điểm danh thành công.", false);
             }
