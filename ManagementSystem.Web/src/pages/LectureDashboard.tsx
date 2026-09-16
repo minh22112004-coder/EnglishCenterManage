@@ -24,7 +24,8 @@ const LectureDashboard = () => {
       const token = localStorage.getItem('token');
       
       const [scheduleRes, studentRes] = await Promise.all([
-        axios.get(`/workschedule`, { headers: { Authorization: `Bearer ${token}` } }),
+        // The schedule request is the lecture portal's primary authenticated bootstrap.
+        axios.get(`/workschedule`, { headers: { Authorization: `Bearer ${token}` }, authFailureAction: 'logout' }),
         axios.get(`/student`, { headers: { Authorization: `Bearer ${token}` } })
       ]);
       

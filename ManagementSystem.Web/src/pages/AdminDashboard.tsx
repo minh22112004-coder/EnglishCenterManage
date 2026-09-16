@@ -22,7 +22,9 @@ const AdminDashboard = () => {
         const headers = { Authorization: `Bearer ${token}` };
 
         const [studentsRes, classesRes, schedulesRes] = await Promise.all([
-          axios.get(`/student`, { headers }),
+          // This is the dashboard's primary authenticated bootstrap request.
+          // Auxiliary requests must not clear the session independently.
+          axios.get(`/student`, { headers, authFailureAction: 'logout' }),
           axios.get(`/class`, { headers }),
           axios.get(`/workschedule`, { headers })
         ]);

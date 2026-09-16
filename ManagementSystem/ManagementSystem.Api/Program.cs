@@ -156,3 +156,6 @@ app.MapControllers();
 app.MapGet("/", () => "API is running!");
 
 app.Run();
+
+// Expose the top-level application entry point for end-to-end authentication tests.
+public partial class Program { }

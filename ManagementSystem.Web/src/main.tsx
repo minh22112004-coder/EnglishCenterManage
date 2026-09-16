@@ -5,6 +5,7 @@ import App from './App.tsx'
 import axios from 'axios'
 import { toast } from 'react-hot-toast'
 import { clearSession } from './utils/auth'
+import { shouldLogoutForUnauthorized } from './utils/authFailure'
 
 axios.defaults.baseURL = import.meta.env.VITE_API_URL || 'http://localhost:5146/api';
 
@@ -29,7 +30,7 @@ axios.interceptors.request.use(
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && error.config?.authFailureAction === 'logout') {
+    if (shouldLogoutForUnauthorized(error)) {
       clearSession();
       toast.error('Phiên đăng nhập đã hết hạn hoặc bị thu hồi. Vui lòng đăng nhập lại!');
       window.location.href = '/login';

@@ -1,9 +1,18 @@
 using System.Security.Claims;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Configuration;
 using ManagementSystem.Api.Constants;
 using ManagementSystem.Api.Controllers;
 using ManagementSystem.Api.Data;
@@ -11,8 +20,10 @@ using ManagementSystem.Api.Models;
 
 namespace ManagementSystem.Api.Tests;
 
-public class RoleOwnershipIntegrationTests : IClassFixture<PostgreSqlFixture>
+[Collection("RoleOwnership PostgreSQL integration")]
+public class RoleOwnershipIntegrationTests
 {
+    private static int _phoneSequence = 10_000_000;
     private readonly PostgreSqlFixture _fixture;
 
     public RoleOwnershipIntegrationTests(PostgreSqlFixture fixture)
@@ -117,6 +128,10 @@ public class RoleOwnershipIntegrationTests : IClassFixture<PostgreSqlFixture>
         var user = await CreateUserAsync(userManager, NewPhone(), AppRoles.Lecture);
         var oldStamp = await userManager.GetSecurityStampAsync(user);
 
+        using var factory = CreateHttpFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var oldToken = await LoginAsync(client, user, "Test@123");
+
         var controller = new UserController(userManager, context);
         var result = await controller.ChangeRole(user.Id, new ChangeRoleDto { TargetRole = AppRoles.User });
         Assert.IsType<OkObjectResult>(result);
@@ -126,6 +141,13 @@ public class RoleOwnershipIntegrationTests : IClassFixture<PostgreSqlFixture>
         var currentStamp = await userManager.GetSecurityStampAsync(refreshed!);
         Assert.NotEqual(oldStamp, currentStamp);
         Assert.NotEqual(oldStamp, refreshed!.SecurityStamp);
+
+        var response = await GetStudentsWithTokenAsync(client, oldToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var freshToken = await LoginAsync(client, user, "Test@123");
+        var freshResponse = await GetStudentsWithTokenAsync(client, freshToken);
+        Assert.Equal(HttpStatusCode.OK, freshResponse.StatusCode);
     }
 
     [SkippableFact]
@@ -138,6 +160,10 @@ public class RoleOwnershipIntegrationTests : IClassFixture<PostgreSqlFixture>
         var user = await CreateUserAsync(userManager, NewPhone(), AppRoles.Lecture);
         var oldStamp = await userManager.GetSecurityStampAsync(user);
 
+        using var factory = CreateHttpFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var oldToken = await LoginAsync(client, user, "Test@123");
+
         var controller = new UserController(userManager, context);
         var result = await controller.ResetLecturePassword(user.Id);
         Assert.IsType<OkObjectResult>(result);
@@ -145,6 +171,13 @@ public class RoleOwnershipIntegrationTests : IClassFixture<PostgreSqlFixture>
         var refreshed = await userManager.FindByIdAsync(user.Id);
         Assert.NotNull(refreshed);
         Assert.NotEqual(oldStamp, await userManager.GetSecurityStampAsync(refreshed!));
+
+        var response = await GetStudentsWithTokenAsync(client, oldToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var freshToken = await LoginAsync(client, user, $"{user.PhoneNumber}@123Aa");
+        var freshResponse = await GetStudentsWithTokenAsync(client, freshToken);
+        Assert.Equal(HttpStatusCode.OK, freshResponse.StatusCode);
     }
 
     [SkippableFact]
@@ -245,6 +278,35 @@ public class RoleOwnershipIntegrationTests : IClassFixture<PostgreSqlFixture>
     private IServiceScope CreateScope()
         => _fixture.ServiceProvider!.CreateScope();
 
+    private JwtTestApplicationFactory CreateHttpFactory()
+    {
+        _fixture.EnsureDockerOrSkip();
+        return new JwtTestApplicationFactory(_fixture.ConnectionString!);
+    }
+
+    private static async Task<string> LoginAsync(HttpClient client, AppUser user, string password)
+    {
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            username = user.UserName,
+            password
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(payload.TryGetProperty("token", out var tokenProperty));
+        var token = tokenProperty.GetString();
+        Assert.False(string.IsNullOrWhiteSpace(token));
+        return token!;
+    }
+
+    private static async Task<HttpResponseMessage> GetStudentsWithTokenAsync(HttpClient client, string token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/student");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await client.SendAsync(request);
+    }
+
     private static AppDbContext GetContext(IServiceScope scope)
         => scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -311,5 +373,42 @@ public class RoleOwnershipIntegrationTests : IClassFixture<PostgreSqlFixture>
     }
 
     private static string NewPhone()
-        => $"09{Random.Shared.Next(0, 100_000_000):D8}";
+        => $"09{Interlocked.Increment(ref _phoneSequence):D8}";
+
+    private sealed class JwtTestApplicationFactory : WebApplicationFactory<Program>
+    {
+        private readonly string _connectionString;
+
+        public JwtTestApplicationFactory(string connectionString)
+        {
+            _connectionString = connectionString;
+        }
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Testing");
+            builder.UseSetting("ConnectionStrings:DefaultConnection", _connectionString);
+            builder.ConfigureAppConfiguration((_, configuration) =>
+            {
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:DefaultConnection"] = _connectionString
+                });
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                // Replace both application DbContext registrations so the test
+                // server cannot accidentally connect to a developer machine DB.
+                services.RemoveAll<DbContextOptions<AppDbContext>>();
+                services.RemoveAll<IDbContextFactory<AppDbContext>>();
+                services.AddDbContextFactory<AppDbContext>(options => options.UseNpgsql(_connectionString));
+                services.AddDbContext<AppDbContext>(options => options.UseNpgsql(_connectionString), ServiceLifetime.Scoped, ServiceLifetime.Singleton);
+            });
+        }
+    }
+}
+
+[CollectionDefinition("RoleOwnership PostgreSQL integration", DisableParallelization = true)]
+public sealed class RoleOwnershipPostgreSqlCollection : ICollectionFixture<PostgreSqlFixture>
+{
 }
