@@ -181,6 +181,35 @@ public class RoleOwnershipIntegrationTests
     }
 
     [SkippableFact]
+    public async Task ChangePassword_RevokesOldJwt()
+    {
+        _fixture.EnsureDockerOrSkip();
+        using var scope = CreateScope();
+        var userManager = GetUserManager(scope);
+        var context = GetContext(scope);
+        var user = await CreateUserAsync(userManager, NewPhone(), AppRoles.Lecture);
+
+        using var factory = CreateHttpFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var oldToken = await LoginAsync(client, user, "Test@123");
+
+        using var changeRequest = new HttpRequestMessage(HttpMethod.Post, "/api/auth/change-password")
+        {
+            Content = JsonContent.Create(new { oldPassword = "Test@123", newPassword = "Changed@123" })
+        };
+        changeRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", oldToken);
+        var changeResponse = await client.SendAsync(changeRequest);
+        Assert.Equal(HttpStatusCode.OK, changeResponse.StatusCode);
+
+        var revokedResponse = await GetStudentsWithTokenAsync(client, oldToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, revokedResponse.StatusCode);
+
+        var freshToken = await LoginAsync(client, user, "Changed@123");
+        var freshResponse = await GetStudentsWithTokenAsync(client, freshToken);
+        Assert.Equal(HttpStatusCode.OK, freshResponse.StatusCode);
+    }
+
+    [SkippableFact]
     public async Task ParentCannotReadAnotherParentsChild()
     {
         _fixture.EnsureDockerOrSkip();

@@ -188,7 +188,6 @@ namespace ManagementSystem.Api.Controllers
             
             if (result.Succeeded)
             {
-                await _userManager.UpdateSecurityStampAsync(user);
                 return Ok(new { message = "Đổi mật khẩu thành công." });
             }
 
